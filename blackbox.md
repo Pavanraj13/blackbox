@@ -4,7 +4,7 @@
 
 **Team Name / ID:** BlackBox
 
-**Team Lead:** Upendra Pavan Raj
+**Team Lead:** Avaneesh Verma
 
 **Team Members:**
 
@@ -21,7 +21,11 @@ Pick one, combine two, write your own, or leave it blank:
   Cool Team Member (a bit of everything)
 -->
 
-- Upendra Pavan Raj | Cool Team Member
+- Avaneesh Verma | Agent Whisperer
+- Sriram | Backend Developer
+- Nitish | Frontend Developer
+- Pavan | Integrations Engineer
+- Mohith | Cool Team Member
 
 **Repo Link (Optional):** https://github.com/Pavanraj13/blackbox.git
 
