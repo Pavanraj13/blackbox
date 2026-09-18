@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Environment and secrets
+.env
+.env.local
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Test Agent generated artifacts
+backend/screenshots/
+backend/reports/
+screenshots/
+reports/
+
+# Build outputs
+dist/
+build/
+.vite/
+
+# System / OS
+.DS_Store
+Thumbs.db
+Desktop.ini
