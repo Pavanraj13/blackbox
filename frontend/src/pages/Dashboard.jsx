@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Play, Activity, AlertTriangle, Eye, ShieldAlert, CheckCircle2, ArrowRight } from 'lucide-react';
-import { getRuns, startRun } from '../services/api';
+import { getRuns, startRun, getHealth } from '../services/api';
 
 export default function Dashboard() {
   const [runs, setRuns] = useState([]);
@@ -9,11 +9,22 @@ export default function Dashboard() {
   const [goal, setGoal] = useState("Search for blue running shoes under $100 and complete guest checkout.");
   const [targetUrl, setTargetUrl] = useState("http://localhost:3001");
   const [starting, setStarting] = useState(false);
+  const [engineInfo, setEngineInfo] = useState("Ollama Local (qwen3.6:35b)");
   const navigate = useNavigate();
 
   useEffect(() => {
     fetchRuns();
+    fetchHealth();
   }, []);
+
+  const fetchHealth = async () => {
+    try {
+      const data = await getHealth();
+      if (data?.model) {
+        setEngineInfo(`${data.provider ? data.provider.toUpperCase() : 'OLLAMA'} (${data.model})`);
+      }
+    } catch (e) {}
+  };
 
   const fetchRuns = async () => {
     try {
@@ -93,22 +104,72 @@ export default function Dashboard() {
 
       {/* Quick Launch Panel */}
       <div className="bg-gradient-to-r from-slate-900 via-[#0f172a] to-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <Play className="text-cyan-400" size={20} /> Launch New Autonomous Test
             </h3>
-            <p className="text-xs text-slate-400">Specify a natural language goal. The black-box agent will explore Chrome autonomously.</p>
+            <p className="text-xs text-slate-400">Specify any website and natural language goal. The agent perceives and navigates black-box DOM autonomously.</p>
+          </div>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950/80 border border-cyan-500/30 text-xs font-mono text-cyan-400">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>Engine: <strong>{engineInfo}</strong></span>
           </div>
         </div>
 
-        <form onSubmit={handleStartTest} className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {/* Quick Presets */}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <span className="text-xs font-semibold text-slate-400">Quick Presets:</span>
+          <button
+            type="button"
+            onClick={() => {
+              setTargetUrl("http://localhost:3001");
+              setGoal("Search for blue running shoes under $100 and complete guest checkout.");
+            }}
+            className="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition"
+          >
+            👟 Demo Store
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setTargetUrl("https://en.wikipedia.org");
+              setGoal("Search for Alan Turing, open the article, and navigate to his early life section.");
+            }}
+            className="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition"
+          >
+            🌐 Wikipedia
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setTargetUrl("https://news.ycombinator.com");
+              setGoal("Find the top story about AI, click on comments, and inspect user opinions.");
+            }}
+            className="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition"
+          >
+            📰 Hacker News
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setTargetUrl("https://github.com");
+              setGoal("Search for 'fastapi' repositories and find the most starred project.");
+            }}
+            className="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition"
+          >
+            🐙 GitHub
+          </button>
+        </div>
+
+        <form onSubmit={handleStartTest} className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2">
           <div className="md:col-span-1">
             <label className="block text-xs font-semibold text-slate-400 mb-1">Target Application URL</label>
             <input
-              type="url"
+              type="text"
               value={targetUrl}
               onChange={(e) => setTargetUrl(e.target.value)}
+              placeholder="e.g. https://en.wikipedia.org or http://localhost:3001"
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
               required
             />

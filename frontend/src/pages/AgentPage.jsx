@@ -214,6 +214,17 @@ export default function AgentPage() {
                   )}
 
                   <p className="text-slate-400 text-[11px] leading-relaxed">{step.reason}</p>
+
+                  {step.thinking && (
+                    <details className="mt-1 text-[10px] text-cyan-300/90 bg-slate-950/70 p-2 rounded-lg border border-cyan-900/40">
+                      <summary className="cursor-pointer font-mono font-semibold text-cyan-400 hover:text-cyan-300 select-none">
+                        🧠 View AI Chain-of-Thought
+                      </summary>
+                      <div className="mt-1.5 font-mono whitespace-pre-wrap text-slate-300 max-h-40 overflow-y-auto leading-normal">
+                        {step.thinking}
+                      </div>
+                    </details>
+                  )}
                 </div>
               ))
             )}

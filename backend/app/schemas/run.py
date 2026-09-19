@@ -22,6 +22,7 @@ class StepSchema(BaseModel):
     action: str
     target: Optional[str] = None
     reason: Optional[str] = None
+    thinking: Optional[str] = None
     confidence: float
     url: str
     screenshot_path: Optional[str] = None

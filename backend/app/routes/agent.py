@@ -1,4 +1,6 @@
+import sys
 import asyncio
+import threading
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -7,6 +9,18 @@ from app.schemas.run import RunCreate, RunResponse
 from app.services.agent import AutonomousAgentService
 
 router = APIRouter(prefix="/api/runs", tags=["agent"])
+
+def _execute_run_thread(run_id: str):
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(AutonomousAgentService.execute_run(run_id))
+    except Exception as e:
+        print(f"[RunThread] Execution ended with: {e}")
+    finally:
+        loop.close()
 
 @router.post("", response_model=RunResponse)
 async def create_run(payload: RunCreate, db: Session = Depends(get_db)):
@@ -21,8 +35,9 @@ async def create_run(payload: RunCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_run)
 
-    # Launch autonomous agent task in main event loop
-    asyncio.create_task(AutonomousAgentService.execute_run(new_run.id))
+    # Launch autonomous agent task in dedicated thread with Windows Proactor loop
+    worker = threading.Thread(target=_execute_run_thread, args=(new_run.id,), daemon=True)
+    worker.start()
 
     return RunResponse(
         run_id=new_run.id,

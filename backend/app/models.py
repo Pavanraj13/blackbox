@@ -36,6 +36,7 @@ class Step(Base):
     action = Column(String, nullable=False) # CLICK, TYPE, SCROLL, BACK, WAIT, FINISH
     target = Column(Text, nullable=True)
     reason = Column(Text, nullable=True)
+    thinking = Column(Text, nullable=True)
     confidence = Column(Float, default=1.0)
     url = Column(String, nullable=False)
     screenshot_path = Column(String, nullable=True)

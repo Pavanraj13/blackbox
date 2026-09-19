@@ -91,6 +91,7 @@ class AutonomousAgentService:
                 action_type = decision.get("action", "WAIT").upper()
                 target_idx = decision.get("target_index")
                 reason = decision.get("reason", "")
+                thinking = decision.get("thinking")
                 confidence = float(decision.get("confidence", 0.90))
 
                 # Resolve target element representation
@@ -138,6 +139,7 @@ class AutonomousAgentService:
                     action=action_type,
                     target=target_desc,
                     reason=reason,
+                    thinking=thinking,
                     confidence=confidence,
                     url=current_url,
                     screenshot_path=str(screenshot_path),
@@ -152,6 +154,7 @@ class AutonomousAgentService:
                     "action": action_type,
                     "target": target_desc,
                     "reason": reason,
+                    "thinking": thinking,
                     "confidence": confidence,
                     "url": current_url,
                     "screenshot_path": str(screenshot_path)
@@ -199,11 +202,20 @@ class AutonomousAgentService:
             run.report_path = report_file
             db.commit()
 
+        except asyncio.CancelledError:
+            print(f"[AutonomousAgent] Run {run_id} cancelled / server reloaded.")
+            try:
+                run.status = "STOPPED"
+                run.error_message = "Run was cancelled or interrupted by server reload."
+                db.commit()
+            except Exception:
+                pass
+            raise
         except Exception as e:
             print(f"[AutonomousAgent] Fatal error during run execution: {e}")
             traceback.print_exc()
             run.status = "FAILED"
-            run.error_message = str(e)
+            run.error_message = str(e) or type(e).__name__
             db.commit()
 
         finally:

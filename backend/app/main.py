@@ -1,4 +1,10 @@
 import os
+import sys
+import asyncio
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -34,13 +40,31 @@ app.include_router(agent.router)
 app.include_router(runs.router)
 app.include_router(reports.router)
 
+@app.get("/")
+def root():
+    from app.config import LLM_PROVIDER, OLLAMA_MODEL, OPENAI_MODEL
+    provider = LLM_PROVIDER
+    model = OLLAMA_MODEL if provider == "ollama" else OPENAI_MODEL
+    return {
+        "engine": "Autonomous Black-Box UI/UX & Accessibility Testing Agent API",
+        "status": "online",
+        "provider": provider,
+        "model": model,
+        "health": "/api/health",
+        "docs": "/docs",
+        "dashboard": "http://localhost:3002"
+    }
+
 @app.get("/api/health")
 def health_check():
-    key = get_openai_api_key()
-    ai_status = "configured" if key else "semantic_fallback_active"
+    from app.config import LLM_PROVIDER, OLLAMA_MODEL, OPENAI_MODEL
+    provider = LLM_PROVIDER
+    model = OLLAMA_MODEL if provider == "ollama" else OPENAI_MODEL
     return {
         "status": "ok",
         "browser": "ready",
-        "ai": ai_status
+        "provider": provider,
+        "model": model,
+        "ai": f"{provider}:{model}"
     }
 
