@@ -1,24 +1,42 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { History, Eye, Play, CheckCircle2, AlertCircle } from 'lucide-react';
-import { getRuns } from '../services/api';
+import { History, Eye, Play, Square, CheckCircle2, AlertCircle } from 'lucide-react';
+import { getRuns, stopRun } from '../services/api';
 
 export default function RunsPage() {
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [stoppingId, setStoppingId] = useState(null);
 
   useEffect(() => {
     fetchRuns();
+    // Auto-refresh every 3 seconds if any test is currently running
+    const interval = setInterval(() => {
+      fetchRuns(true);
+    }, 3000);
+    return () => clearInterval(interval);
   }, []);
 
-  const fetchRuns = async () => {
+  const fetchRuns = async (silent = false) => {
     try {
       const data = await getRuns();
       setRuns(data);
     } catch (err) {
-      console.error("Error fetching runs:", err);
+      if (!silent) console.error("Error fetching runs:", err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
+    }
+  };
+
+  const handleStopRun = async (runId) => {
+    try {
+      setStoppingId(runId);
+      await stopRun(runId);
+      await fetchRuns(true);
+    } catch (err) {
+      console.error("Failed to stop run:", err);
+    } finally {
+      setStoppingId(null);
     }
   };
 
@@ -88,12 +106,25 @@ export default function RunsPage() {
                       {new Date(r.started_at).toLocaleString()}
                     </td>
                     <td className="p-4 text-right">
-                      <Link
-                        to={`/report/${r.id}`}
-                        className="inline-flex items-center gap-1 text-xs font-bold text-cyan-400 hover:underline bg-cyan-500/10 px-3 py-1.5 rounded-lg border border-cyan-500/20"
-                      >
-                        <Eye size={14} /> Audit Report
-                      </Link>
+                      <div className="flex items-center justify-end gap-2">
+                        {r.status === 'RUNNING' && (
+                          <button
+                            onClick={() => handleStopRun(r.id)}
+                            disabled={stoppingId === r.id}
+                            className="inline-flex items-center gap-1 text-xs font-bold text-rose-400 hover:text-rose-300 hover:bg-rose-500/20 bg-rose-500/10 px-3 py-1.5 rounded-lg border border-rose-500/30 transition disabled:opacity-50"
+                            title="Stop this test run immediately"
+                          >
+                            <Square size={12} className="fill-current" />
+                            {stoppingId === r.id ? 'Stopping...' : 'Stop'}
+                          </button>
+                        )}
+                        <Link
+                          to={`/report/${r.id}`}
+                          className="inline-flex items-center gap-1 text-xs font-bold text-cyan-400 hover:underline bg-cyan-500/10 px-3 py-1.5 rounded-lg border border-cyan-500/20"
+                        >
+                          <Eye size={14} /> Audit Report
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 ))}

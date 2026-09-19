@@ -25,6 +25,37 @@ The project is an autonomous black-box agentic framework for UI/UX testing, acce
    - **Port:** 3000 (`http://localhost:3000`)
    - **Role:** Real-time developer dark dashboard to launch test runs, observe live screenshot feeds, inspect reasoning timelines, view detected accessibility issues, and read visual audit reports.
 
+## Conceptual Architecture & Execution Loop (In Simple Terms)
+
+```
+[ User Prompt: Goal + URL ]
+          │
+          ▼
+   ┌──────────────┐
+   │ 1. OBSERVE   │ ──> Playwright scans the rendered web page (The "Eyes")
+   └──────┬───────┘     Extracts buttons, links, inputs, and their visual position.
+          │
+          ▼
+   ┌──────────────┐
+   │ 2. REASON    │ ──> Local Ollama LLM / Fallback Planner (The "Brain")
+   └──────┬───────┘     Decides the single next action: CLICK #5 ("Buy Now"), TYPE, SCROLL.
+          │
+          ▼
+   ┌──────────────┐
+   │ 3. ACT       │ ──> Playwright drives Chrome (The "Hands")
+   └──────┬───────┘     Clicks, types, scrolls, and takes a full screenshot.
+          │
+          ▼
+   ┌──────────────┐
+   │ 4. AUDIT     │ ──> Accessibility & Friction Engine (The "Inspector")
+   └──────┬───────┘     Checks WCAG contrast, missing labels, touch targets & friction.
+          │
+     (Repeat loop until Goal Finished or Max Steps reached)
+          │
+          ▼
+[ Comprehensive Visual Audit Report + Friction Score ]
+```
+
 ## How to Run the Application
 
 ### 1. Prerequisites
@@ -92,3 +123,37 @@ npm run dev
   - **Issues Detected**: 9 accessibility defects (unlabeled controls, small touch targets, non-descriptive link labels).
   - **Screenshots**: `step_001.png`, `step_002.png`, `step_003.png`.
   - **Report**: Full HTML audit report generated at `backend/reports/run_9f1274a1-1468-4f4a-ab54-4634c1117afb.html`.
+
+## Deep E-Commerce Perception & Planning Upgrades (Amazon Root Cause Resolution)
+
+### 1. Root Causes for Missing "Buy Now" and Repeating Search:
+1. **DOM Hard Truncation (`[:50]` elements)**:
+   - Amazon pages have 300+ interactive elements. The original observer truncated elements to the first 50 strictly in document tree order.
+   - The first 50 elements were exclusively top navbar links (Mobiles, Best Sellers, Customer Service, Search bar).
+   - The Buy Box (`#buy-now-button`, `#add-to-cart-button`, `#submit.buy-now`) was sliced off before being presented to the planner. The model's own internal reasoning explicitly noted: *"I don't see a clear 'Add to Cart' or 'Buy Now' button in the list of 50 elements provided... let me scroll down"*.
+2. **AUI (Amazon UI) Transparent Input Overlays & CSS**:
+   - Amazon's `<input id="buy-now-button" class="a-button-input">` has `opacity: 0.01`, overlaying `<span id="submit.buy-now" class="a-button">` with text "Buy Now".
+   - The original observer discarded elements with low opacity or spans with children, and the `<input>` element had `value: ""` and `innerText: ""` resulting in an empty accessible name.
+3. **Ollama `qwen3.6:35b` Thinking Exhaustion**:
+   - `qwen3.6:35b` is a reasoning model that produces `<think>` traces. When fed ~12,000 character prompts with 85 elements, its internal thinking exceeded `num_predict: 1024` tokens before generating the final JSON response, yielding empty content and falling back into generic search loops.
+4. **Tab Detachment on `target="_blank"`**:
+   - Amazon product cards open in new tabs (`target="_blank"`), leaving the browser page object detached on the search results tab.
+
+### 2. Implemented Architecture Fixes:
+1. **Observer Overhaul (`backend/app/services/observer.py`)**:
+   - Added specific selectors for `.a-button`, `[id*="buy-now"]`, `[id*="add-to-cart"]`.
+   - Permitted styled overlay buttons with low/zero opacity.
+   - Synthesized accessible labels from parent `.a-button` wrappers, `title`, and `aria-labelledby`.
+   - Filtered primary actions strictly to high-intent purchasing actions (`Buy Now`, `Add to Cart`, `Proceed to Checkout`, `Place Order`)—excluding generic `search` and `submit`.
+   - Prioritized primary actions to the top of the element observation list, followed by visual reading order of elements within the active viewport.
+2. **Planner Optimization (`backend/app/services/planner.py`)**:
+   - Filtered nameless junk elements to deliver a clean, compact ~45-element observation payload (~4,500 chars).
+   - Configured `"think": False` in Ollama chat payload, dropping evaluation latency from 90s timeout down to ~15s with direct, structured JSON action generation.
+   - Enhanced fallback planner and system prompt with strict e-commerce rules: if on a product page or if `[PRIMARY ACTION]` is visible, immediately click 'Buy Now' or 'Add to Cart'.
+3. **Browser Resilience (`backend/app/services/browser.py`)**:
+   - Integrated `_strip_target_blank()` to keep navigation within a single tab.
+   - Auto-synchronized `self.page = self.context.pages[-1]`.
+   - Added `force=True` fallback in Playwright click execution to handle overlay spans and transparent button inputs.
+4. **Test Run Termination UI (`frontend/`)**:
+   - **Report Page (`ReportPage.jsx`)**: Added red `TERMINATE TEST` button with real-time polling to immediately stop running tests.
+   - **Runs Page (`RunsPage.jsx`)**: Added `Stop` button in the actions column for any active run with status `RUNNING`, along with 3-second auto-refresh polling.

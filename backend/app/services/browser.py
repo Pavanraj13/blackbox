@@ -1,6 +1,6 @@
 import asyncio
 from typing import Optional, Dict, Any
-from playwright.async_api import async_playwright, Browser, Page, Playwright
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
 
 DESKTOP_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -11,6 +11,7 @@ class BrowserManager:
     def __init__(self):
         self.playwright: Optional[Playwright] = None
         self.browser: Optional[Browser] = None
+        self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
 
     async def start(self, headless: bool = True):
@@ -23,13 +24,31 @@ class BrowserManager:
                 '--disable-blink-features=AutomationControlled'
             ]
         )
-        context = await self.browser.new_context(
+        self.context = await self.browser.new_context(
             viewport={'width': 1280, 'height': 800},
             device_scale_factor=1,
             user_agent=DESKTOP_USER_AGENT,
             locale="en-US"
         )
-        self.page = await context.new_page()
+        self.page = await self.context.new_page()
+
+        def _on_new_page(new_page: Page):
+            self.page = new_page
+
+        self.context.on("page", _on_new_page)
+
+    async def _strip_target_blank(self):
+        """Prevents links from opening unwanted new tabs, keeping navigation in the active tab."""
+        if not self.page:
+            return
+        try:
+            await self.page.evaluate("""() => {
+                try {
+                    document.querySelectorAll('a[target="_blank"]').forEach(a => a.removeAttribute('target'));
+                } catch(e) {}
+            }""")
+        except Exception:
+            pass
 
     async def navigate(self, url: str):
         if not self.page:
@@ -50,6 +69,7 @@ class BrowserManager:
                 print(f"[BrowserManager] Navigate warning for {url}: {e}")
 
         await self.page.wait_for_timeout(1200)
+        await self._strip_target_blank()
         await self._auto_dismiss_cookie_popups()
 
     async def _auto_dismiss_cookie_popups(self):
@@ -69,9 +89,9 @@ class BrowserManager:
         for sel in cookie_selectors:
             try:
                 btn = self.page.locator(sel).first
-                if await btn.is_visible(timeout=500):
-                    await btn.click(timeout=1000)
-                    await self.page.wait_for_timeout(500)
+                if await btn.is_visible(timeout=400):
+                    await btn.click(timeout=800)
+                    await self.page.wait_for_timeout(400)
                     break
             except Exception:
                 pass
@@ -85,6 +105,11 @@ class BrowserManager:
         if not self.page:
             return False
 
+        # Ensure active tab is synchronized
+        if self.context and len(self.context.pages) > 0:
+            self.page = self.context.pages[-1]
+
+        await self._strip_target_blank()
         action_type = action_data.get("action", "").upper()
 
         try:
@@ -101,7 +126,11 @@ class BrowserManager:
                         }""", selector)
                         await self.page.wait_for_timeout(200)
 
-                        await self.page.click(selector, timeout=3500)
+                        try:
+                            await self.page.click(selector, timeout=2500)
+                        except Exception:
+                            # Try with force=True (handles overlay spans / transparent inputs like Amazon buttons)
+                            await self.page.click(selector, timeout=2000, force=True)
                     except Exception:
                         # Fallback to coordinate click if selector fails
                         x = target_element.get("x", 0) + (target_element.get("width", 0) / 2)
@@ -112,7 +141,11 @@ class BrowserManager:
                     y = target_element.get("y", 0) + (target_element.get("height", 0) / 2)
                     await self.page.mouse.click(x, y)
 
-                await self.page.wait_for_timeout(1000)
+                await self.page.wait_for_timeout(1200)
+                # Check if a new tab opened
+                if self.context and len(self.context.pages) > 0:
+                    self.page = self.context.pages[-1]
+                await self._strip_target_blank()
                 await self._auto_dismiss_cookie_popups()
                 return True
 
@@ -145,7 +178,10 @@ class BrowserManager:
                     await self.page.keyboard.type(text_to_type)
                     await self.page.keyboard.press("Enter")
 
-                await self.page.wait_for_timeout(1000)
+                await self.page.wait_for_timeout(1500)
+                if self.context and len(self.context.pages) > 0:
+                    self.page = self.context.pages[-1]
+                await self._strip_target_blank()
                 return True
 
             elif action_type == "SCROLL":
@@ -153,7 +189,7 @@ class BrowserManager:
                 amount = action_data.get("amount", 600)
                 delta_y = amount if direction == "down" else -amount
                 await self.page.evaluate(f"window.scrollBy({{ top: {delta_y}, behavior: 'smooth' }})")
-                await self.page.wait_for_timeout(700)
+                await self.page.wait_for_timeout(800)
                 return True
 
             elif action_type == "BACK":
@@ -178,10 +214,13 @@ class BrowserManager:
         return False
 
     async def close(self):
+        if self.context:
+            await self.context.close()
         if self.browser:
             await self.browser.close()
         if self.playwright:
             await self.playwright.stop()
         self.page = None
+        self.context = None
         self.browser = None
         self.playwright = None

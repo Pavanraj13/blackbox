@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { FileText, CheckCircle2, AlertTriangle, ShieldAlert, ArrowLeft, ExternalLink, Camera } from 'lucide-react';
-import { getRun, getRunSteps, getRunIssues } from '../services/api';
+import { FileText, CheckCircle2, AlertTriangle, ShieldAlert, ArrowLeft, ExternalLink, Camera, Square } from 'lucide-react';
+import { getRun, getRunSteps, getRunIssues, stopRun } from '../services/api';
 
 export default function ReportPage() {
   const { id } = useParams();
@@ -9,10 +9,15 @@ export default function ReportPage() {
   const [steps, setSteps] = useState([]);
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [stopping, setStopping] = useState(false);
   const [selectedScreenshot, setSelectedScreenshot] = useState(null);
 
   useEffect(() => {
     fetchReportData();
+    const interval = setInterval(() => {
+      fetchReportData();
+    }, 2500);
+    return () => clearInterval(interval);
   }, [id]);
 
   const fetchReportData = async () => {
@@ -32,7 +37,20 @@ export default function ReportPage() {
     }
   };
 
-  if (loading) {
+  const handleStopRun = async () => {
+    if (!id || stopping) return;
+    setStopping(true);
+    try {
+      await stopRun(id);
+      await fetchReportData();
+    } catch (err) {
+      alert("Failed to stop test: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  if (loading && !run) {
     return <div className="p-12 text-center text-slate-500">Loading audit report data...</div>;
   }
 
@@ -42,6 +60,7 @@ export default function ReportPage() {
 
   const uxIssues = issues.filter(i => i.type === 'FRICTION');
   const a11yIssues = issues.filter(i => i.type === 'ACCESSIBILITY');
+  const isRunning = run.status === 'RUNNING';
 
   return (
     <div className="p-8 space-y-8 max-w-7xl mx-auto">
@@ -51,20 +70,41 @@ export default function ReportPage() {
           <Link to="/runs" className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-cyan-400">
             <ArrowLeft size={14} /> Back to Runs
           </Link>
-          <h1 className="text-2xl font-extrabold text-white flex items-center gap-2">
-            <FileText className="text-cyan-400" /> Autonomous UI/UX & Accessibility Audit Report
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-extrabold text-white flex items-center gap-2">
+              <FileText className="text-cyan-400" /> Autonomous UI/UX & Accessibility Audit Report
+            </h1>
+            <span className={`px-2.5 py-1 text-xs font-bold rounded-full uppercase ${
+              run.status === 'COMPLETED' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+              run.status === 'RUNNING' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 animate-pulse' :
+              'bg-slate-800 text-slate-400'
+            }`}>
+              {run.status}
+            </span>
+          </div>
           <p className="text-xs text-slate-400 font-mono">Run ID: {run.id}</p>
         </div>
 
-        <a
-          href={`http://localhost:8000/api/runs/${run.id}/report`}
-          target="_blank"
-          rel="noreferrer"
-          className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition shadow-lg shadow-cyan-500/20"
-        >
-          <ExternalLink size={14} /> Open Standalone HTML Report
-        </a>
+        <div className="flex items-center gap-3">
+          {isRunning && (
+            <button
+              onClick={handleStopRun}
+              disabled={stopping}
+              className="bg-rose-500 hover:bg-rose-600 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 transition shadow-lg shadow-rose-500/20"
+            >
+              <Square size={14} /> {stopping ? 'Stopping...' : 'TERMINATE TEST'}
+            </button>
+          )}
+
+          <a
+            href={`http://localhost:8000/api/runs/${run.id}/report`}
+            target="_blank"
+            rel="noreferrer"
+            className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 transition shadow-lg shadow-cyan-500/20"
+          >
+            <ExternalLink size={14} /> Open Standalone HTML Report
+          </a>
+        </div>
       </div>
 
       {/* Goal Banner */}

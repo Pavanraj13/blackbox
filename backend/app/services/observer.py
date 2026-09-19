@@ -17,13 +17,14 @@ class ObserverService:
                 '[role="button"]', '[role="link"]', '[role="searchbox"]',
                 '[role="tab"]', '[role="menuitem"]', '[role="option"]',
                 '[role="combobox"]', '[role="checkbox"]', '[role="radio"]',
-                '[onclick]', '[tabindex="0"]', 'summary'
+                '[onclick]', '[tabindex="0"]', 'summary',
+                '.a-button', '[id*="buy-now"]', '[id*="add-to-cart"]'
             ].join(', ');
 
             // Find all semantic interactive nodes
             const rawNodes = Array.from(document.querySelectorAll(interactiveSelectors));
             
-            // Also include clickable styled divs/spans on modern SPAs
+            // Also inspect clickable styled divs/spans on modern SPAs
             const allElements = Array.from(document.querySelectorAll('div, span, li, p'));
             for (let i = 0; i < Math.min(allElements.length, 300); i++) {
                 const el = allElements[i];
@@ -37,18 +38,36 @@ class ObserverService:
             function isElementVisible(el) {
                 if (!el) return false;
                 const style = window.getComputedStyle(el);
-                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+                if (style.display === 'none' || style.visibility === 'hidden') return false;
+                // Permit transparent button overlay inputs like Amazon's a-button-input
+                const elId = (el.id || '').toLowerCase();
+                const isOverlayButton = elId.includes('buy') || elId.includes('cart') || elId.includes('btn') || elId.includes('button');
+                if (style.opacity === '0' && !isOverlayButton) return false;
                 const rect = el.getBoundingClientRect();
-                return rect.width > 3 && rect.height > 3;
+                return rect.width > 4 && rect.height > 4;
             }
 
             function getAccessibleName(el) {
-                if (el.getAttribute('aria-label')) return el.getAttribute('aria-label').trim();
+                // 1. Check aria-label
+                if (el.getAttribute('aria-label') && el.getAttribute('aria-label').trim()) {
+                    return el.getAttribute('aria-label').trim();
+                }
+
+                // 2. Check aria-labelledby
                 if (el.getAttribute('aria-labelledby')) {
                     const ref = document.getElementById(el.getAttribute('aria-labelledby'));
                     if (ref && ref.innerText.trim()) return ref.innerText.trim();
                 }
 
+                // 3. For input buttons / submit inputs / inputs with value
+                if (el.value && typeof el.value === 'string' && el.value.trim().length > 0) {
+                    const val = el.value.trim();
+                    if (val.length < 100 && !val.includes('{') && !val.includes('function')) {
+                        return val;
+                    }
+                }
+
+                // 4. Check associated label
                 if (el.id) {
                     const labelEl = document.querySelector(`label[for="${el.id}"]`);
                     if (labelEl && labelEl.innerText.trim()) return labelEl.innerText.trim();
@@ -56,10 +75,27 @@ class ObserverService:
                 const parentLabel = el.closest('label');
                 if (parentLabel && parentLabel.innerText.trim()) return parentLabel.innerText.trim();
 
-                if (el.innerText && el.innerText.trim()) return el.innerText.trim();
-                if (el.value && el.value.trim()) return el.value.trim();
-                if (el.placeholder && el.placeholder.trim()) return el.placeholder.trim();
+                // 5. Check title attribute
                 if (el.title && el.title.trim()) return el.title.trim();
+
+                // 6. Check inner text of headers or strong tags inside links/cards (e.g. Amazon product titles)
+                const headingInside = el.querySelector('h1, h2, h3, h4, h5, span.a-size-medium, span.a-text-normal');
+                if (headingInside && headingInside.innerText.trim()) {
+                    return headingInside.innerText.trim();
+                }
+
+                // 7. Direct inner text
+                if (el.innerText && el.innerText.trim()) {
+                    return el.innerText.trim();
+                }
+
+                // 8. Child image with alt text (e.g. product card image link)
+                const img = el.querySelector('img[alt]');
+                if (img && img.alt && img.alt.trim()) {
+                    return img.alt.trim();
+                }
+
+                if (el.placeholder && el.placeholder.trim()) return el.placeholder.trim();
                 if (el.alt && el.alt.trim()) return el.alt.trim();
                 
                 return "";
@@ -70,7 +106,11 @@ class ObserverService:
                 const tag = el.tagName.toLowerCase();
                 if (tag === 'button') return 'button';
                 if (tag === 'a') return 'link';
-                if (tag === 'input') return el.type || 'input';
+                if (tag === 'input') {
+                    const type = (el.type || '').toLowerCase();
+                    if (type === 'submit' || type === 'button') return 'button';
+                    return type || 'input';
+                }
                 if (tag === 'select') return 'select';
                 if (tag === 'textarea') return 'textarea';
                 if (tag === 'summary') return 'button';
@@ -106,12 +146,11 @@ class ObserverService:
                 const role = getRole(el);
                 const tag = el.tagName.toLowerCase();
 
-                // Prevent duplicates at exact same visual coordinate and text
-                const dedupeKey = `${tag}_${Math.round(rect.left)}_${Math.round(rect.top)}_${accName.slice(0, 20)}`;
+                // Prevent duplicate elements at exact same visual location and name
+                const dedupeKey = `${tag}_${Math.round(rect.left)}_${Math.round(rect.top)}_${accName.slice(0, 25)}`;
                 if (seenKeys.has(dedupeKey)) return;
                 seenKeys.add(dedupeKey);
 
-                // Determine if form input has dedicated label
                 let hasLabel = false;
                 if (tag === 'input' || tag === 'select' || tag === 'textarea') {
                     if (el.id && document.querySelector(`label[for="${el.id}"]`)) {
@@ -125,15 +164,36 @@ class ObserverService:
                     hasLabel = true;
                 }
 
-                const inViewport = rect.top >= 0 && rect.top <= viewportHeight;
+                // In-viewport calculation
+                const inViewport = (rect.top >= -50 && rect.top <= viewportHeight + 100);
+
+                // Detect primary high-intent action buttons (Buy Now, Add to Cart, Checkout, etc.)
+                const nameLower = accName.toLowerCase();
+                const elId = (el.id || '').toLowerCase();
+                let isPrimaryAction = [
+                    'buy now', 'buy with 1-click', 'add to cart', 'proceed to buy',
+                    'proceed to checkout', 'place your order', 'place order',
+                    'complete purchase', 'pay now'
+                ].some(k => nameLower.includes(k) || elId.includes(k.replace(/\s+/g, '-')) || elId.includes(k.replace(/\s+/g, '')));
+
+                if (!isPrimaryAction && (elId.includes('buy-now') || elId.includes('buynow') || elId.includes('add-to-cart') || elId.includes('addtocart'))) {
+                    isPrimaryAction = true;
+                }
+
+                if (isPrimaryAction && !accName) {
+                    if (elId.includes('buy') || nameLower.includes('buy')) accName = 'Buy Now';
+                    else if (elId.includes('cart') || nameLower.includes('cart')) accName = 'Add to Cart';
+                    else accName = 'Buy Now / Add to Cart';
+                }
 
                 elements.push({
                     tag: tag,
                     role: role,
-                    text: (el.innerText || el.value || "").trim().slice(0, 80),
-                    accessible_name: accName.slice(0, 80),
+                    text: (el.innerText || el.value || "").trim().slice(0, 90),
+                    accessible_name: accName.slice(0, 90),
                     visible: true,
                     in_viewport: inViewport,
+                    is_primary_action: isPrimaryAction,
                     x: Math.round(rect.left),
                     y: Math.round(rect.top),
                     width: Math.round(rect.width),
@@ -146,13 +206,22 @@ class ObserverService:
                 });
             });
 
-            // Sort elements by reading order: top-to-bottom, then left-to-right
+            // Sorting logic:
+            // 1. Primary action buttons (Buy Now, Add to Cart) first!
+            // 2. In-viewport elements in visual reading order (top-to-bottom, left-to-right)
+            // 3. Out-of-viewport elements last
             elements.sort((a, b) => {
-                if (Math.abs(a.y - b.y) > 20) return a.y - b.y;
+                if (a.is_primary_action && !b.is_primary_action) return -1;
+                if (!a.is_primary_action && b.is_primary_action) return 1;
+
+                if (a.in_viewport && !b.in_viewport) return -1;
+                if (!a.in_viewport && b.in_viewport) return 1;
+
+                if (Math.abs(a.y - b.y) > 25) return a.y - b.y;
                 return a.x - b.x;
             });
 
-            const bodyText = (document.body ? document.body.innerText : "").slice(0, 2000);
+            const bodyText = (document.body ? document.body.innerText : "").slice(0, 2500);
 
             return {
                 elements: elements,
@@ -163,14 +232,14 @@ class ObserverService:
 
         raw_obs = await page.evaluate(inspection_js)
 
-        # Assign indices sequentially
+        # Assign indices sequentially based on priority sorted list
         elements_list = []
         for idx, el in enumerate(raw_obs.get("elements", [])):
             el["index"] = idx
             elements_list.append(el)
 
         # Calculate state signature hash
-        state_str = f"{url}|{title}|" + "|".join([f"{e['role']}:{e['accessible_name']}" for e in elements_list[:15]])
+        state_str = f"{url}|{title}|" + "|".join([f"{e['role']}:{e['accessible_name']}" for e in elements_list[:20]])
         state_sig = hashlib.sha256(state_str.encode('utf-8')).hexdigest()[:16]
 
         observation = {

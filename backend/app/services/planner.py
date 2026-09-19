@@ -32,12 +32,17 @@ Allowed Actions:
 6. FINISH:
    {"action": "FINISH", "reason": "...", "confidence": 0.99}
 
-Key Guidelines:
-- If a cookie banner, modal dialog, or privacy notice obstructs the screen, click "Accept", "Agree", or "Close".
-- To search, TYPE the query into the search input box (Enter key is automatically triggered).
-- If you reach the final state (e.g. order confirmed, target information found, goal accomplished), return FINISH.
-- Do not repeat actions that yielded no state change; try an alternative link or SCROLL down to discover more elements.
-- Return ONLY valid JSON."""
+Crucial Decision Rules:
+1. If the goal mentions "buy", "order", "purchase", or "cart":
+   - Once a product page is reached or if 'Buy Now' / 'Add to Cart' is visible (elements tagged [PRIMARY ACTION]), YOUR TOP PRIORITY IS TO CLICK 'Buy Now' or 'Add to Cart'.
+   - NEVER click the product title, product image, or re-type in search when you are already viewing the product!
+2. When searching:
+   - Initial step: TYPE search query into search input.
+   - On search results page: CLICK the title link of the relevant product.
+   - On product page: CLICK 'Buy Now' or 'Add to Cart'.
+3. If a cookie banner, modal dialog, or popover appears, click 'Accept', 'Agree', or 'Close'.
+4. If the goal is fulfilled (order placed, checkout reached, requested info displayed), return FINISH.
+5. Return JSON only with "action", "target_index" (integer), and "reason"."""
 
 class PlannerService:
     @staticmethod
@@ -76,34 +81,41 @@ class PlannerService:
     def _extract_json_and_thinking(raw_text: str) -> tuple[Dict[str, Any], str]:
         """Extracts JSON object and thinking traces from raw model output."""
         thinking = ""
-        # Check for <think>...</think> tags (e.g. DeepSeek/Qwen thinking mode)
         think_match = re.search(r"<think>(.*?)</think>", raw_text, re.DOTALL | re.IGNORECASE)
         if think_match:
             thinking = think_match.group(1).strip()
             raw_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL | re.IGNORECASE).strip()
 
-        # Try direct JSON parsing
+        parsed = None
         try:
-            return json.loads(raw_text.strip()), thinking
+            parsed = json.loads(raw_text.strip())
         except Exception:
             pass
 
-        # Strip markdown code block fences ```json ... ```
-        fenced_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
-        if fenced_match:
-            try:
-                return json.loads(fenced_match.group(1).strip()), thinking
-            except Exception:
-                pass
+        if not parsed:
+            fenced_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
+            if fenced_match:
+                try:
+                    parsed = json.loads(fenced_match.group(1).strip())
+                except Exception:
+                    pass
 
-        # Look for first and last curly braces
-        start = raw_text.find("{")
-        end = raw_text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(raw_text[start:end+1]), thinking
-            except Exception:
-                pass
+        if not parsed:
+            start = raw_text.find("{")
+            end = raw_text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    parsed = json.loads(raw_text[start:end+1])
+                except Exception:
+                    pass
+
+        if parsed and isinstance(parsed, dict):
+            if "index" in parsed and "target_index" not in parsed:
+                try:
+                    parsed["target_index"] = int(parsed["index"])
+                except Exception:
+                    pass
+            return parsed, thinking
 
         raise ValueError(f"Unable to parse valid JSON from text: {raw_text[:200]}")
 
@@ -113,23 +125,39 @@ class PlannerService:
         observation: Dict[str, Any],
         previous_steps: List[Dict[str, Any]]
     ) -> str:
-        # Provide top 50 visible interactive elements with clean attributes
+        url = (observation.get("url") or "").lower()
+        is_product = any(p in url for p in ["/dp/", "/gp/", "/product/", "/item/"])
+
         compact_elements = []
-        for el in observation.get("elements", [])[:50]:
-            if el.get("visible", True):
-                compact_elements.append({
-                    "index": el["index"],
-                    "role": el["role"],
-                    "accessible_name": (el.get("accessible_name") or el.get("text") or el.get("placeholder") or "")[:70],
-                    "tag": el["tag"]
-                })
+        for el in observation.get("elements", []):
+            name = (el.get("accessible_name") or el.get("text") or el.get("placeholder") or "").strip()
+            if not name:
+                continue
+
+            meta_tags = []
+            if el.get("is_primary_action"):
+                meta_tags.append("[PRIMARY ACTION]")
+            if el.get("in_viewport"):
+                meta_tags.append("[IN VIEWPORT]")
+            
+            tag_str = " ".join(meta_tags)
+            name_with_meta = f"{name[:70]} {tag_str}".strip()
+
+            compact_elements.append({
+                "index": el["index"],
+                "role": el["role"],
+                "name": name_with_meta
+            })
+            if len(compact_elements) >= 50:
+                break
 
         return json.dumps({
             "goal": goal,
             "current_url": observation.get("url"),
             "page_title": observation.get("title"),
-            "page_text_summary": observation.get("visible_text", "")[:400],
-            "observed_elements": compact_elements,
+            "is_product_page": is_product,
+            "page_text_summary": observation.get("visible_text", "")[:350],
+            "observed_interactive_elements": compact_elements,
             "recent_actions": [
                 f"Step {s.get('step_number')}: {s.get('action')} {s.get('target', '')}"
                 for s in previous_steps[-5:]
@@ -153,9 +181,10 @@ class PlannerService:
             ],
             "format": "json",
             "stream": False,
+            "think": False,
             "options": {
                 "temperature": 0.1,
-                "num_predict": 1024
+                "num_predict": 512
             }
         }
 
@@ -214,6 +243,13 @@ class PlannerService:
     def _validate_decision(decision: Dict[str, Any], observation: Dict[str, Any]) -> bool:
         if not isinstance(decision, dict):
             return False
+
+        if "index" in decision and "target_index" not in decision:
+            try:
+                decision["target_index"] = int(decision["index"])
+            except Exception:
+                pass
+
         action = decision.get("action", "").upper()
         if action not in ["CLICK", "TYPE", "SCROLL", "BACK", "WAIT", "FINISH"]:
             return False
@@ -236,8 +272,8 @@ class PlannerService:
         visited_states: List[str]
     ) -> Dict[str, Any]:
         """
-        Domain-agnostic fallback planner that works dynamically on ANY website.
-        Extracts semantic keywords from the goal and ranks interactive DOM elements.
+        Domain-agnostic fallback planner that works dynamically on ANY website,
+        with deep handling for E-Commerce flows (Search -> Product -> Buy Now/Cart -> Checkout).
         """
         url = observation.get("url", "").lower()
         title = observation.get("title", "").lower()
@@ -249,12 +285,12 @@ class PlannerService:
         last_action = last_step.get("action")
 
         # 1. Goal Completion Check
-        completion_terms = ["confirmation", "order confirmed", "thank you", "success", "congratulations", "receipt"]
-        if any(term in visible_text or term in title or term in url for term in completion_terms):
+        completion_terms = ["order confirmation", "thank you for your order", "order placed", "confirmed", "receipt"]
+        if any(term in visible_text or term in title for term in completion_terms):
             return {
                 "action": "FINISH",
-                "reason": "Target confirmation / success state detected on page.",
-                "confidence": 0.98
+                "reason": "Order confirmation / success state detected on page.",
+                "confidence": 0.99
             }
 
         # 2. Cookie / Modal Banner Dismissal Check
@@ -271,30 +307,67 @@ class PlannerService:
                     "confidence": 0.95
                 }
 
-        # 3. Extract semantic keywords from goal (excluding common stop words)
+        # 3. Extract semantic keywords from goal
         stop_words = {
             "a", "an", "the", "in", "on", "at", "to", "for", "and", "or", "of", "with",
-            "is", "are", "complete", "search", "find", "open", "go", "get", "by", "under"
+            "is", "are", "complete", "search", "find", "open", "go", "get", "by", "under", "buy"
         }
         tokens = [w for w in re.findall(r"\b[a-z0-9]+\b", goal_lower) if w not in stop_words and len(w) > 1]
-        search_phrase = " ".join(tokens[:4]) if tokens else "search"
+        search_phrase = " ".join(tokens[:4]) if tokens else "products"
 
-        # 4. Search input check (if goal asks to search and we haven't typed yet)
-        if ("search" in goal_lower or "find" in goal_lower) and last_action != "TYPE":
+        # 4. PRIMARY E-COMMERCE PURCHASE BUTTONS (Buy Now, Add to Cart, Proceed to Buy, Place Order)
+        # If user wants to buy/purchase or is on a product page, check for instant purchase buttons
+        buy_action_keywords = [
+            "buy now", "buy with 1-click", "add to cart", "proceed to buy",
+            "proceed to checkout", "place your order", "place order", "complete purchase"
+        ]
+        if "buy" in goal_lower or "cart" in goal_lower or "/dp/" in url or "/gp/" in url or "product" in url:
+            for kw in buy_action_keywords:
+                for el in elements:
+                    if not el.get("visible", True):
+                        continue
+                    name = (el.get("accessible_name") or el.get("text") or "").lower()
+                    if kw in name:
+                        return {
+                            "action": "CLICK",
+                            "target_index": el["index"],
+                            "reason": f"Click primary purchasing button '{name}' to proceed with purchase.",
+                            "confidence": 0.98
+                        }
+
+        # 5. PRODUCT SELECTION FROM SEARCH RESULTS
+        # If on a search results page (e.g. Amazon search), click on the top matching product card
+        is_search_page = ("/s?" in url or "search" in url or "/s/" in url)
+        if is_search_page and last_action != "CLICK":
+            for el in elements:
+                if not el.get("visible", True) or el.get("role") != "link":
+                    continue
+                name = (el.get("accessible_name") or el.get("text") or "").lower()
+                # If product link matches any goal tokens and is a descriptive title (>15 chars)
+                if any(t in name for t in tokens) and len(name) > 12:
+                    return {
+                        "action": "CLICK",
+                        "target_index": el["index"],
+                        "reason": f"Select matching product '{name[:45]}' from search results.",
+                        "confidence": 0.95
+                    }
+
+        # 6. SEARCH INPUT (if goal asks to search or buy and we haven't typed yet)
+        if ("search" in goal_lower or "buy" in goal_lower) and last_action != "TYPE" and not is_search_page:
             for el in elements:
                 if el.get("visible", True) and el.get("tag") == "input":
                     inp_type = (el.get("input_type") or "").lower()
                     name = (el.get("accessible_name") or el.get("placeholder") or "").lower()
-                    if inp_type in ["search", "text"] and ("search" in name or "find" in name or "query" in name or inp_type == "search"):
+                    if inp_type in ["search", "text"] and ("search" in name or "query" in name or inp_type == "search"):
                         return {
                             "action": "TYPE",
                             "target_index": el["index"],
                             "text": search_phrase,
                             "reason": f"Type query '{search_phrase}' into search input.",
-                            "confidence": 0.93
+                            "confidence": 0.94
                         }
 
-        # 5. Form field inputs (e.g. email, name, address, quantity)
+        # 7. Form inputs (email, name, phone)
         if last_action != "TYPE":
             for el in elements:
                 if el.get("visible", True) and el.get("tag") == "input":
@@ -306,31 +379,12 @@ class PlannerService:
                         return {
                             "action": "TYPE",
                             "target_index": el["index"],
-                            "text": "guest.tester@example.com",
+                            "text": "guest.shopper@example.com",
                             "reason": "Fill email address in required form field.",
                             "confidence": 0.92
                         }
 
-        # 6. Primary Action Buttons (checkout, place order, submit, continue, add to cart, proceed)
-        primary_btn_keywords = [
-            "place order", "checkout", "add to cart", "proceed", "submit",
-            "continue", "buy now", "confirm", "next"
-        ]
-        for kw in primary_btn_keywords:
-            if kw in goal_lower or "cart" in url or "checkout" in url or "product" in url:
-                for el in elements:
-                    if not el.get("visible", True):
-                        continue
-                    name = (el.get("accessible_name") or el.get("text") or "").lower()
-                    if kw in name:
-                        return {
-                            "action": "CLICK",
-                            "target_index": el["index"],
-                            "reason": f"Click primary action control '{name}' to proceed toward goal.",
-                            "confidence": 0.94
-                        }
-
-        # 7. Semantic Keyword Matching across all visible interactive elements
+        # 8. Semantic Keyword Matching across all visible interactive elements
         best_candidate = None
         best_score = 0
 
@@ -346,7 +400,11 @@ class PlannerService:
                 if token in name:
                     score += 2
             
-            # Penalize recently targeted elements to prevent loops
+            # Bonus for elements in current viewport
+            if el.get("in_viewport"):
+                score += 1
+
+            # Penalize recently clicked targets
             recent_targets = [s.get("target", "").lower() for s in previous_steps[-3:]]
             if any(name in rt for rt in recent_targets):
                 score -= 3
@@ -364,7 +422,7 @@ class PlannerService:
                 "confidence": 0.88
             }
 
-        # 8. Loop prevention: If same state signature repeated, scroll down
+        # 9. Loop prevention: If repeated state detected, scroll down
         if len(visited_states) >= 2 and visited_states[-1] == visited_states[-2]:
             return {
                 "action": "SCROLL",
@@ -374,11 +432,11 @@ class PlannerService:
                 "confidence": 0.82
             }
 
-        # 9. Click first available prominent link or button
+        # 10. Click first prominent visible link or button in viewport
         for el in elements:
-            if el.get("visible", True) and el.get("role") in ["button", "link"]:
+            if el.get("visible", True) and el.get("in_viewport") and el.get("role") in ["button", "link"]:
                 name = (el.get("accessible_name") or el.get("text") or "").strip()
-                if name and len(name) > 2:
+                if name and len(name) > 3:
                     return {
                         "action": "CLICK",
                         "target_index": el["index"],
