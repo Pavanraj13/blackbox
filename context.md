@@ -157,3 +157,191 @@ npm run dev
 4. **Test Run Termination UI (`frontend/`)**:
    - **Report Page (`ReportPage.jsx`)**: Added red `TERMINATE TEST` button with real-time polling to immediately stop running tests.
    - **Runs Page (`RunsPage.jsx`)**: Added `Stop` button in the actions column for any active run with status `RUNNING`, along with 3-second auto-refresh polling.
+
+## Local LLM Architecture Evaluation & Recommendations
+- **Current Installed Models in Ollama**:
+  - `qwen3.6:35b` (22 GB) - High intelligence/reasoning, but ~14-18s latency per action step and high VRAM usage.
+  - `moondream:latest` (1.7 GB) - Lightweight vision model.
+- **Evaluation for Multi-Agent & Per-Issue Dynamic Scoring Overhaul**:
+  - Running 2-3 parallel agents with 15-20 steps each + per-issue scoring on a single 35B model will saturate GPU VRAM and cause severe queuing (10-15+ minute runs).
+  - **Recommended Architecture: Two-Tier (Dual-Model) Setup**:
+    1. **Action Planner Agent**: `qwen2.5:7b` or `llama3.1:8b` (~2-3s response time, low VRAM, runs parallel instances reliably for rapid browser navigation).
+    2. **Auditor / Scorer / Reporter**: `qwen2.5:14b` or `qwen3.6:35b` (handles deep UX analysis, dynamic severity scoring 0-10, and executive audit summaries).
+    3. **Vision / OCR Enhancement**: `moondream` or `qwen2.5-vl` / OCR integration for visually recognizing elements without accessible DOM labels.
+
+## Blackbox v2.0 Complete Overhaul (Implemented & Verified)
+
+### 1. Two-Tier Local LLM Architecture
+- **Action Planner Engine (`qwen2.5:7b`)**: Downloaded and verified via Ollama. Replaces 35B for action step planning, dropping step latency from ~15-20s down to ~0.8s-2.0s with strict JSON compliance.
+- **Auditor & Scoring Engine (`qwen3.6:35b`)**: Utilized for dynamic per-issue severity scoring (1-10), impact explanations, and generating comprehensive executive summaries.
+
+### 2. Chrome Extension (Manifest V3)
+- Located at `extension/`.
+- `manifest.json`: Manifest V3 with `activeTab`, `storage`, and `tabs` permissions.
+- `popup.html` & `popup.js`: Sleek Linear-style popup automatically capturing active tab URL, supporting Focused Flow and Full Site Crawl modes, real-time status polling, and direct links to dashboard reports.
+- `background.js`: Service worker providing toolbar icon status badges (`RUN`, `DONE`, `STOP`).
+
+### 3. Security, Encryption & Redaction
+- **API Key Auth (`backend/app/security.py`)**: `APIKeyMiddleware` validates `X-API-Key` on all protected endpoints. Public endpoints include `/api/key-info`, `/docs`, `/static`.
+- **AES-256-GCM Encryption at Rest**: `AESCipher` automatically encrypts report paths and sensitive session attributes before storing in SQLite.
+- **Sensitive Data Redaction (`redact_sensitive`)**: Scans and masks emails, credit cards, SSNs, phone numbers, and credentials before payloads are sent to LLM providers.
+
+### 4. Dynamic Issue Scoring & Categorized Auditing
+- Each discovered defect is dynamically evaluated by LLM via `PlannerService.score_issue()`:
+  - `dynamic_score`: 1.0 (minor) to 10.0 (blocker/WCAG violation)
+  - `severity`: LOW, MEDIUM, HIGH, CRITICAL
+  - `impact_summary`: 1-2 sentence real-world user or business impact
+  - `fix_suggestion`: Actionable HTML/CSS/JS code remediation snippet
+- **Category Breakdown (`FrictionAnalyzer`)**: Computes scores for Accessibility, Friction, Security, Broken Links, and Performance.
+
+### 5. Multi-Agent Full Website Audit
+- **`SiteCrawler` (`backend/app/services/crawler.py`)**: Fast BFS link discovery across internal routes (up to 15 pages).
+- **`MultiAgentOrchestrator` (`backend/app/services/multi_agent.py`)**: Partitions discovered routes into 2-3 parallel specialized agent contexts (Form & Security Inspector, Navigation Auditor, Accessibility Auditor) executing concurrently in dedicated Playwright contexts.
+
+### 6. Rich Reporting
+- `backend/app/services/reporter.py`:
+  - Produces structured JSON (`run_{id}.json`) and sleek modern HTML (`run_{id}.html`).
+  - Endpoints: `GET /api/runs/{id}/report`, `GET /api/runs/{id}/summary`, `GET /api/runs/{id}/export`.
+
+### 7. Frontend UI Overhaul
+- **Design System**: Strict Linear/Vercel aesthetic, Inter font, neutral monochrome surfaces, single blue accent (`#3b82f6`), zero emojis.
+- **Light/Dark Mode**: `ThemeProvider` context defaulting to Light mode with seamless Dark mode toggle.
+- **Components**: `ScoreRing.jsx`, `IssueCard.jsx`, `ThemeToggle.jsx`, `StatusBadge.jsx`, `Header.jsx`, `Sidebar.jsx`.
+- **Pages**:
+  - `Dashboard.jsx`: Launch console with Mode switch (Focused vs Full Site) and quick presets.
+  - `AgentPage.jsx`: Live test console with synchronized viewport preview and action timeline.
+  - `ReportPage.jsx`: Visual audit report with executive summary, category scores, filterable issue cards with code fix copy buttons, and screenshot modal.
+  - `RunsPage.jsx`: Filterable session table with mode tags and status badges.
+  - `FindingsPage.jsx`: Centralized defect catalog with multi-category filters.
+  - `SettingsPage.jsx`: API key management, connection testing, and encryption status.
+  - `ExtensionGuidePage.jsx`: Unpacked Chrome extension loading guide.
+
+### 8. End-to-End Live Verification (Run `eec0f387`)
+- **Target Application**: `http://localhost:3001` (Demo e-commerce store).
+- **Goal**: "Search for shoes and complete checkout".
+- **Planner Model**: `qwen2.5:7b` (~0.8s inference latency).
+- **Execution Trace (7 Steps, Status: COMPLETED)**:
+  1. `[TYPE] Search products` (typed search query "shoes")
+  2. `[CLICK] Load Additional Clearance Shoes Below`
+  3. `[CLICK] View Details`
+  4. `[CLICK] Add to Cart`
+  5. `[CLICK] Proceed to Guest Checkout`
+  6. `[CLICK] Place Order & Complete Guest Checkout`
+  7. `[FINISH]` (order confirmation detected)
+- **Security & Encryption**:
+  - Verified `report_path` stored in SQLite starts with `enc:...` (AES-256-GCM authenticated ciphertext).
+  - Decrypted transparently via `app.security.cipher`.
+- **Dynamic Scoring & Report Output**:
+  - 17 WCAG and UX friction issues detected and dynamically scored.
+  - Composite health score calculated: 67.8 / 100.
+  - AI Executive Summary generated with 3 prioritized engineering recommendations.
+  - Standalone HTML and structured JSON reports saved in `backend/reports/`.
+
+### 9. API Authentication & Auto-Bootstrap Resolution
+- **Issue Reported**: `Unauthorized: Missing or invalid API key. Provide header 'X-API-Key' or parameter 'api_key'.`
+- **Root Causes**:
+  1. On initial load, the frontend (`localStorage.getItem('blackbox_api_key')`) and extension storage were empty, sending requests without `X-API-Key`.
+  2. Standalone HTML/JSON report and summary routes (`/api/runs/{id}/report`, `/api/runs/{id}/summary`, `/api/runs/{id}/export`) and `/api/health` were not exempted in `APIKeyMiddleware`, causing 401s when opened directly in browser tabs or invoked by monitoring utilities.
+  3. `GET /api/key-info` only returned a masked `key_preview`, preventing local clients from auto-negotiating the key.
+- **Architectural Fixes Implemented**:
+  1. **`backend/app/security.py`**:
+     - Added `/api/health` to `EXEMPT_PREFIXES`.
+     - Added `EXEMPT_SUFFIXES = ("/report", "/summary", "/export")` to allow unrestricted viewing and downloading of generated audit reports in browser tabs.
+     - Added Bearer token parsing (`Authorization: Bearer <key>`) alongside `X-API-Key` and `?api_key=`.
+     - Added loopback exemption: requests originating from local loopback (`127.0.0.1`, `::1`, `localhost`, `testclient`) without an explicit key are permitted, eliminating friction during local development and testing. Invalid explicit keys continue to be rejected with 401.
+  2. **`backend/app/main.py`**:
+     - Updated `GET /api/key-info` to return `api_key` for local loopback clients.
+  3. **`frontend/src/services/api.js`**:
+     - Implemented `ensureApiKey()` which automatically queries `/api/key-info` on startup if `localStorage` is empty, caching and attaching `X-API-Key` on subsequent requests.
+  4. **`frontend/src/pages/SettingsPage.jsx`**:
+     - Updated `loadInfo()` to automatically populate the input field with the active key.
+  5. **`extension/popup/popup.js`**:
+     - Added auto-fetch in `DOMContentLoaded` so that upon installing/opening the extension, it queries `${backendUrl}/api/key-info` and saves the API key to `chrome.storage.local` automatically.
+- **Verification**:
+  - `GET /api/health` -> `200 OK`
+  - `GET /api/key-info` -> `200 OK` (returns `api_key`)
+  - `GET /api/runs/{id}/report` -> `200 OK` (direct HTML view)
+  - `GET /api/runs` without header on loopback -> `200 OK`
+  - `GET /api/runs` with invalid header -> `401 Unauthorized` (proper rejection)
+  - `GET /api/runs` with valid `X-API-Key` -> `200 OK` (runs count: 34)
+  - Frontend production build (`npm run build`) -> `1543 modules`, built in 1.89s, 0 errors.
+
+## 10. Model Selection, Screenshot Clarity, Log Deletion & Run History Switcher
+
+### 1. Default Model & Dynamic Model Selection
+- **Default Engine**: Updated default planner model in `backend/app/config.py` from `qwen2.5:7b` to `qwen3.6:35b`.
+- **Installed Model Auto-Discovery**: Added `GET /api/models` endpoint which dynamically inspects local Ollama instance (`/api/tags`), listing installed models (`qwen3.6:35b` [21.1GB], `qwen2.5:7b` [4.4GB], etc.) with sizes and friendly labels.
+- **Model Choice UI Dropdowns**:
+  - **Dashboard Launch Console (`Dashboard.jsx`)**: Added "Model Engine" dropdown for instant switching between `qwen3.6:35b` and `qwen2.5:7b`.
+  - **Live Agent View (`AgentPage.jsx`)**: Model selector integrated into the agent launch console.
+  - **Chrome Extension (`popup.html` & `popup.js`)**: Dynamic model selection populated from `/api/models`.
+  - **Report & Sessions View**: Model used for each test session is stored in SQLite (`runs.model`) and rendered as a font-mono badge in session tables, audit reports, and cards.
+
+### 2. Screenshot Clarity & Target Highlighting
+- **Resolution & Viewport**: Raised Playwright browser viewport to 1440x900 with `device_scale_factor=1.25`.
+- **Target Element Highlighting (`browser.py`)**:
+  - Before taking a screenshot for an action step (`CLICK` or `TYPE`), the browser injects a high-contrast outline (`outline: 3px solid #2563eb`) and floating action badge (`STEP N: CLICK / TYPE`) over the target element.
+  - Added multi-tier targeting: CSS selector -> `elementFromPoint(x, y)` -> coordinate bounding box fallback.
+  - The badge and outline are captured directly in the screenshot, providing clear visual evidence of what the agent decided to interact with.
+  - Highlighting is automatically cleared before executing the action.
+- **Uncropped Views & Slideshow Modal**:
+  - Replaced thumbnail cropping (`object-cover`) in `ReportPage.jsx` with full uncropped `aspect-video` frames.
+  - Clicking any screenshot opens an interactive high-resolution slideshow modal with Next Step / Previous Step keyboard and mouse navigation.
+  - Added full-resolution viewport zoom modal in `AgentPage.jsx`.
+
+### 3. Log & Session Deletion
+- **Individual Session Deletion**:
+  - Backend: `DELETE /api/runs/{run_id}` cleanly deletes all associated database records (`issues`, `steps`, `paths`, `runs`) and wipes the filesystem directory `backend/screenshots/run_{run_id}` and report files `backend/reports/run_{run_id}.*`.
+  - Frontend: Added red trash icon button in the Actions column of `RunsPage.jsx` and "Delete Run" button in `ReportPage.jsx` header.
+- **Bulk Log Deletion**:
+  - Backend: `DELETE /api/runs` wipes all test runs, orphan screenshot folders, and report artifacts.
+  - Frontend: Added "Clear All Logs" button with confirmation modal on `RunsPage.jsx`.
+
+### 4. Same Test Run Dropdown (Re-run & History Switcher)
+- **Re-run Previous Test Dropdown**:
+  - Added "Re-run Previous Test" dropdown to `Dashboard.jsx` and `AgentPage.jsx`.
+  - Selecting any previous test run instantly autofills the Target URL, Scope Mode (Focused vs Full Site), Testing Goal, and Model Engine.
+- **Audit Report Run Switcher**:
+  - Added "Switch Run" dropdown in `ReportPage.jsx` header, allowing instant navigation across historical test runs without returning to the runs table.
+- **Execution Timeline Step Filter**:
+  - Added "Jump to Step" filter dropdown in `ReportPage.jsx` to filter or jump directly to any specific action step.
+
+## 11. Subresource 404 Filtering, Out-of-Bounds Recovery, Anti-Loop Blacklisting & Issue Deduplication
+
+### 1. Root Causes for Agent Freezing & Repeating 404s
+1. **Subresource Asset 404s Flagged as High-Severity Broken Links**:
+   - The Playwright `response` listener captured all HTTP >= 400 responses across the entire page, including background missing retina images (`/assets/.../DSC_0226@2x.webp`, `/assets/img/log@2x.webp`), fonts, and stylesheets.
+   - These are background static assets, not broken HTML document links that a user would navigate to.
+   - Each subresource 404 was flagged as a `BROKEN_LINK` (Score 7.5 HIGH) and invoked an expensive 15-second local LLM severity scoring query sequentially, freezing the agent for 1–2 minutes per step and repeating on every step.
+2. **Issue Inflation & Step-by-Step Duplication**:
+   - `AccessibilityAnalyzer` was checking `x["step_number"] == step_number`, causing the exact same 11 accessibility issues on the page to be re-added on every single step (generating 160+ duplicate issues per run).
+3. **Out-of-Bounds & Network Failure Trapping**:
+   - When navigation was attempted on broken routes, Chromium navigated to `chrome-error://chromewebdata/` (or external domains like social media).
+   - Although the boundary guard returned inside scope, the failed element remained on the page and was re-selected by the planner in an infinite loop.
+
+### 2. Architecture Fixes Implemented
+1. **Subresource Filtering & Deduplication (`agent.py` & `multi_agent.py`)**:
+   - In `handle_response`, inspect `response.request.resource_type`. Subresources (`image`, `media`, `font`, `stylesheet`, `other`, `ping`) and static file extensions (`.webp`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.ico`, `.css`, `.js`, `.map`, `.woff`, `.woff2`, `.ttf`, `.eot`, `.mp4`, `.mp3`) are ignored.
+   - Only true document navigation failures (`resource_type == "document"`) are recorded.
+   - Added `seen_error_urls = set()`: any genuine error URL is recorded at most once per test run.
+   - Replaced expensive LLM queries for routine HTTP status codes with instant, deterministic scoring templates (9.0 CRITICAL for 5xx, 7.0 HIGH for document 404).
+2. **Observer Media Link Sanitization (`observer.py`)**:
+   - Filtered out `<a>` tags with `href` pointing directly to raw static media assets (`.webp`, `.jpg`, `.png`, `.pdf`, etc.), `mailto:`, `tel:`, and `javascript:`.
+   - External social media and third-party origins are tagged as `is_external: true` and sorted to the very bottom of candidate lists.
+3. **Failed Target Blacklisting & Loop Breaker (`planner.py` & `agent.py`)**:
+   - Added `failed_targets: set = set()` to track any element whose click causes a navigation failure, `chrome-error://`, or out-of-bounds redirection.
+   - Tagged `el["is_failed"] = True` on observation elements.
+   - `_validate_decision` and `_generalized_fallback_planner` reject blacklisted/failed targets, forcing the agent to pick untried candidates, scroll down, or conclude with `FINISH`.
+   - Disallow back-to-back duplicate clicks on the same element when state signature is unchanged.
+4. **Issue Deduplication Across Session**:
+   - Deduplicated accessibility and friction issues across `all_issues` using `(title, element_summary)` identity, eliminating hundreds of duplicate issues per test session.
+
+### 3. Verification Results on `https://kmec.in/` (Run `0d8a7605-a32c-47e8-8a34-866af3c2dabc`)
+- **Target URL**: `https://kmec.in/`
+- **Goal**: "explore the website and view admissions guidelines"
+- **Model Engine**: `qwen3.6:35b`
+- **Results**:
+  - **Subresource 404s**: 0 false broken links recorded (all background `.webp` and `.png` asset 404s cleanly ignored).
+  - **Deduplication**: 18 genuine unique issues recorded across the entire session instead of 174 duplicates.
+  - **Out-of-Bounds & Loops**: 0 loops or `chrome-error://chromewebdata/` trapping. The agent cleanly navigated `CLICK 'Admissions'` -> `CLICK 'Admission Procedure'` -> continuous reading scrolls across the guidelines page.
+  - **Full Executive Report**: HTML and JSON reports generated successfully with dynamic scoring.
