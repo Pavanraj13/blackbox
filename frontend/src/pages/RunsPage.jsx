@@ -1,16 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { History, Eye, Play, Square, CheckCircle2, AlertCircle } from 'lucide-react';
-import { getRuns, stopRun } from '../services/api';
+import { Play, Square, ExternalLink, Search, Filter, Trash2, AlertCircle } from 'lucide-react';
+import { getRuns, stopRun, deleteRun, deleteAllRuns } from '../services/api';
+import StatusBadge from '../components/StatusBadge';
 
 export default function RunsPage() {
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [stoppingId, setStoppingId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+  const [clearingAll, setClearingAll] = useState(false);
+  const [search, setSearch] = useState('');
+  const [modeFilter, setModeFilter] = useState('ALL');
 
   useEffect(() => {
     fetchRuns();
-    // Auto-refresh every 3 seconds if any test is currently running
     const interval = setInterval(() => {
       fetchRuns(true);
     }, 3000);
@@ -40,94 +44,215 @@ export default function RunsPage() {
     }
   };
 
+  const handleDeleteRun = async (runId) => {
+    if (!window.confirm("Are you sure you want to delete this test run and all its screenshots and logs?")) {
+      return;
+    }
+    try {
+      setDeletingId(runId);
+      await deleteRun(runId);
+      setRuns((prev) => prev.filter((r) => r.id !== runId));
+    } catch (err) {
+      alert("Failed to delete run: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleClearAll = async () => {
+    if (!window.confirm("Are you sure you want to delete ALL test runs, screenshots, and logs? This cannot be undone.")) {
+      return;
+    }
+    try {
+      setClearingAll(true);
+      await deleteAllRuns();
+      setRuns([]);
+    } catch (err) {
+      alert("Failed to clear logs: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setClearingAll(false);
+    }
+  };
+
+  const filteredRuns = runs.filter((r) => {
+    const matchesSearch =
+      (r.target_url || '').toLowerCase().includes(search.toLowerCase()) ||
+      (r.goal || '').toLowerCase().includes(search.toLowerCase()) ||
+      r.id.toLowerCase().includes(search.toLowerCase());
+    const matchesMode =
+      modeFilter === 'ALL' || (r.mode || 'FOCUSED').toUpperCase() === modeFilter;
+    return matchesSearch && matchesMode;
+  });
+
   return (
-    <div className="p-8 space-y-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between">
+    <div className="p-8 space-y-6 max-w-6xl mx-auto">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[var(--border)] pb-6">
         <div>
-          <h2 className="text-2xl font-extrabold text-white flex items-center gap-2">
-            <History className="text-cyan-400" /> Historical Test Runs
-          </h2>
-          <p className="text-xs text-slate-400">Review past autonomous black-box audit runs and metrics.</p>
+          <h1 className="text-xl font-semibold tracking-tight text-[var(--text)] mb-1">
+            Audit Test Sessions
+          </h1>
+          <p className="text-xs text-[var(--text-secondary)]">
+            Review previous autonomous test runs, dynamic health scores, and defect breakdowns.
+          </p>
         </div>
 
-        <Link
-          to="/agent"
-          className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition"
-        >
-          <Play size={14} /> NEW TEST RUN
-        </Link>
+        <div className="flex items-center gap-2">
+          {runs.length > 0 && (
+            <button
+              onClick={handleClearAll}
+              disabled={clearingAll}
+              className="px-3 py-2 rounded-md border border-rose-500/30 hover:bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-medium inline-flex items-center gap-1.5 transition-colors"
+              title="Delete all test runs and screenshots"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{clearingAll ? 'Clearing...' : 'Clear All Logs'}</span>
+            </button>
+          )}
+          <Link
+            to="/"
+            className="px-3.5 py-2 rounded-md bg-[var(--accent)] hover:bg-blue-600 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shadow-sm"
+          >
+            <Play className="w-3 h-3 fill-current" />
+            <span>New Audit</span>
+          </Link>
+        </div>
       </div>
 
-      <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+      {/* Filters Bar */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="relative w-full sm:w-72">
+          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by URL, goal, or ID..."
+            className="w-full pl-9 pr-3 py-1.5 text-xs bg-[var(--surface)] border border-[var(--border)] focus:border-[var(--accent)] rounded-md text-[var(--text)] outline-none transition-colors"
+          />
+        </div>
+
+        <div className="flex items-center gap-1.5 w-full sm:w-auto">
+          <span className="text-[11px] text-[var(--text-muted)] font-medium mr-1 flex items-center gap-1">
+            <Filter className="w-3 h-3" /> Scope:
+          </span>
+          {['ALL', 'FOCUSED', 'FULL_SITE'].map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setModeFilter(m)}
+              className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
+                modeFilter === m
+                  ? 'bg-[var(--accent)] text-white'
+                  : 'bg-[var(--surface)] border border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text)]'
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Runs Table */}
+      <div className="bg-[var(--surface)] border border-[var(--border)] rounded-lg overflow-hidden">
         {loading ? (
-          <div className="p-12 text-center text-slate-500">Loading run history...</div>
-        ) : runs.length === 0 ? (
-          <div className="p-12 text-center text-slate-500 space-y-2">
-            <p>No test runs found.</p>
-            <Link to="/agent" className="text-xs text-cyan-400 underline">Start your first autonomous test run</Link>
+          <div className="p-16 text-center text-xs text-[var(--text-muted)] font-mono">
+            Loading run history...
+          </div>
+        ) : filteredRuns.length === 0 ? (
+          <div className="p-16 text-center text-xs text-[var(--text-muted)] font-mono space-y-2">
+            <p>No audit sessions match criteria.</p>
+            <Link to="/" className="text-xs text-[var(--accent)] hover:underline">
+              Launch a new test audit
+            </Link>
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-300">
-              <thead className="bg-slate-900/80 text-xs uppercase tracking-wider text-slate-400 border-b border-slate-800">
+            <table className="w-full text-left text-xs text-[var(--text-secondary)]">
+              <thead className="bg-[var(--surface-elevated)] text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] border-b border-[var(--border)]">
                 <tr>
-                  <th className="p-4">Run ID</th>
-                  <th className="p-4">Testing Goal</th>
-                  <th className="p-4">Target URL</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4">Steps</th>
-                  <th className="p-4">Friction Score</th>
-                  <th className="p-4">Timestamp</th>
-                  <th className="p-4 text-right">Report</th>
+                  <th className="p-3.5">Session ID</th>
+                  <th className="p-3.5">Scope &amp; Status</th>
+                  <th className="p-3.5">Model</th>
+                  <th className="p-3.5">Target Application</th>
+                  <th className="p-3.5">Steps</th>
+                  <th className="p-3.5">Health Score</th>
+                  <th className="p-3.5">Started</th>
+                  <th className="p-3.5 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800">
-                {runs.map((r) => (
-                  <tr key={r.id} className="hover:bg-slate-800/40 transition">
-                    <td className="p-4 font-mono text-xs text-cyan-400 font-bold">{r.id.slice(0, 8)}</td>
-                    <td className="p-4 max-w-sm truncate text-slate-200">{r.goal}</td>
-                    <td className="p-4 font-mono text-xs text-slate-400">{r.target_url}</td>
-                    <td className="p-4">
-                      <span className={`inline-block px-2.5 py-1 text-xs font-bold rounded-full ${
-                        r.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                        r.status === 'RUNNING' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 animate-pulse' :
-                        'bg-slate-800 text-slate-400'
-                      }`}>
-                        {r.status}
-                      </span>
-                    </td>
-                    <td className="p-4 font-mono">{r.steps_count}</td>
-                    <td className="p-4 font-bold">
-                      <span className={r.friction_score >= 80 ? 'text-emerald-400' : r.friction_score >= 50 ? 'text-amber-400' : 'text-rose-400'}>
-                        {r.friction_score}/100
-                      </span>
-                    </td>
-                    <td className="p-4 font-mono text-xs text-slate-500">
-                      {new Date(r.started_at).toLocaleString()}
-                    </td>
-                    <td className="p-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        {r.status === 'RUNNING' && (
+              <tbody className="divide-y divide-[var(--border)]">
+                {filteredRuns.map((r) => {
+                  const isRunning = r.status === 'RUNNING';
+                  const dateStr = r.started_at
+                    ? new Date(r.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : 'Recently';
+
+                  return (
+                    <tr
+                      key={r.id}
+                      className="hover:bg-[var(--surface-elevated)] transition-colors"
+                    >
+                      <td className="p-3.5 font-mono text-[11px] text-[var(--text)] font-semibold">
+                        <Link to={`/report/${r.id}`} className="hover:text-[var(--accent)]">
+                          {r.id.slice(0, 8)}
+                        </Link>
+                      </td>
+                      <td className="p-3.5">
+                        <StatusBadge status={r.status} mode={r.mode} />
+                      </td>
+                      <td className="p-3.5">
+                        <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-[var(--surface-elevated)] border border-[var(--border)] text-[var(--text-secondary)]">
+                          {r.model || 'qwen3.6:35b'}
+                        </span>
+                      </td>
+                      <td className="p-3.5 max-w-xs">
+                        <div className="font-medium text-[var(--text)] truncate" title={r.target_url}>
+                          {r.target_url}
+                        </div>
+                        <div className="text-[11px] text-[var(--text-muted)] truncate" title={r.goal}>
+                          {r.goal}
+                        </div>
+                      </td>
+                      <td className="p-3.5 font-mono text-[var(--text)] font-medium">
+                        {r.steps_count}
+                      </td>
+                      <td className="p-3.5">
+                        <span className="font-mono font-bold text-xs text-[var(--text)]">
+                          {r.friction_score !== undefined ? `${r.friction_score.toFixed(0)}/100` : '—'}
+                        </span>
+                      </td>
+                      <td className="p-3.5 font-mono text-[11px] text-[var(--text-muted)]">
+                        {dateStr}
+                      </td>
+                      <td className="p-3.5 text-right space-x-1.5 whitespace-nowrap">
+                        {isRunning && (
                           <button
                             onClick={() => handleStopRun(r.id)}
                             disabled={stoppingId === r.id}
-                            className="inline-flex items-center gap-1 text-xs font-bold text-rose-400 hover:text-rose-300 hover:bg-rose-500/20 bg-rose-500/10 px-3 py-1.5 rounded-lg border border-rose-500/30 transition disabled:opacity-50"
-                            title="Stop this test run immediately"
+                            className="px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 border border-rose-500/30 text-[11px] font-semibold transition-colors"
                           >
-                            <Square size={12} className="fill-current" />
                             {stoppingId === r.id ? 'Stopping...' : 'Stop'}
                           </button>
                         )}
                         <Link
                           to={`/report/${r.id}`}
-                          className="inline-flex items-center gap-1 text-xs font-bold text-cyan-400 hover:underline bg-cyan-500/10 px-3 py-1.5 rounded-lg border border-cyan-500/20"
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-[var(--surface-elevated)] border border-[var(--border)] hover:border-[var(--border-hover)] text-[11px] font-medium text-[var(--text)] transition-colors"
                         >
-                          <Eye size={14} /> Audit Report
+                          <span>Report</span>
+                          <ExternalLink className="w-3 h-3 text-[var(--text-muted)]" />
                         </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                        <button
+                          onClick={() => handleDeleteRun(r.id)}
+                          disabled={deletingId === r.id}
+                          className="inline-flex items-center p-1.5 rounded hover:bg-rose-500/10 text-[var(--text-muted)] hover:text-rose-500 border border-transparent hover:border-rose-500/20 transition-colors align-middle"
+                          title="Delete run & logs"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

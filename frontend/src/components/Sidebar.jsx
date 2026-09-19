@@ -1,16 +1,28 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Play, History, AlertTriangle, FileText, Activity } from 'lucide-react';
-import { getHealth } from '../services/api';
+import {
+  LayoutDashboard,
+  Play,
+  History,
+  AlertTriangle,
+  Puzzle,
+  Settings,
+  ShieldCheck,
+  CheckCircle2,
+  XCircle
+} from 'lucide-react';
+import { getHealth, getKeyInfo } from '../services/api';
 
 export default function Sidebar() {
   const [health, setHealth] = useState({ status: 'checking', browser: 'unknown', ai: 'unknown' });
+  const [keyInfo, setKeyInfo] = useState({ auth_enabled: false, encryption_enabled: false });
 
   useEffect(() => {
     const check = async () => {
       try {
-        const data = await getHealth();
-        setHealth(data);
+        const [healthData, keyData] = await Promise.allSettled([getHealth(), getKeyInfo()]);
+        if (healthData.status === 'fulfilled') setHealth(healthData.value);
+        if (keyData.status === 'fulfilled') setKeyInfo(keyData.value);
       } catch (err) {
         setHealth({ status: 'offline', browser: 'error', ai: 'offline' });
       }
@@ -22,27 +34,33 @@ export default function Sidebar() {
 
   const navItems = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/agent', label: 'Test Agent', icon: Play },
+    { to: '/agent', label: 'Live Test', icon: Play },
     { to: '/runs', label: 'Test Runs', icon: History },
-    { to: '/findings', label: 'Findings', icon: AlertTriangle },
+    { to: '/findings', label: 'Issues & Findings', icon: AlertTriangle },
+    { to: '/extension-guide', label: 'Browser Extension', icon: Puzzle },
+    { to: '/settings', label: 'Settings', icon: Settings },
   ];
 
   return (
-    <aside className="w-64 bg-[#0b1120] border-r border-slate-800 flex flex-col justify-between h-screen sticky top-0">
+    <aside className="w-60 bg-[var(--surface)] border-r border-[var(--border)] flex flex-col justify-between h-screen sticky top-0 flex-shrink-0 z-30">
       <div>
         {/* Brand Header */}
-        <div className="p-6 border-b border-slate-800 flex items-center gap-3">
-          <div className="bg-gradient-to-tr from-cyan-500 to-indigo-600 p-2 rounded-xl text-white shadow-lg shadow-cyan-500/20">
-            <Activity size={22} />
+        <div className="p-5 border-b border-[var(--border)] flex items-center gap-2.5">
+          <div className="w-5 h-5 rounded bg-[var(--accent)] flex items-center justify-center text-white font-bold text-xs shadow-sm">
+            B
           </div>
           <div>
-            <h1 className="font-extrabold text-sm tracking-wide text-white uppercase">Black-Box Agent</h1>
-            <p className="text-[10px] text-slate-400 font-mono">UI/UX & A11y Tester</p>
+            <h1 className="font-semibold text-xs tracking-wider uppercase text-[var(--text)]">
+              Blackbox
+            </h1>
+            <p className="text-[10px] text-[var(--text-muted)] font-mono">
+              Autonomous UI/UX QA
+            </p>
           </div>
         </div>
 
         {/* Navigation Items */}
-        <nav className="p-4 space-y-1.5">
+        <nav className="p-3 space-y-1">
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
@@ -50,36 +68,52 @@ export default function Sidebar() {
                 key={item.to}
                 to={item.to}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sm transition duration-200 ${
+                  `flex items-center gap-2.5 px-3 py-2 rounded-md font-medium text-xs transition-colors ${
                     isActive
-                      ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                      ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-semibold'
+                      : 'text-[var(--text-secondary)] hover:text-[var(--text)] hover:bg-[var(--surface-elevated)]'
                   }`
                 }
               >
-                <Icon size={18} />
-                {item.label}
+                <Icon className="w-4 h-4 flex-shrink-0" />
+                <span>{item.label}</span>
               </NavLink>
             );
           })}
         </nav>
       </div>
 
-      {/* System Health Widget */}
-      <div className="p-4 m-4 bg-slate-900/80 border border-slate-800 rounded-xl space-y-2">
+      {/* System Status Footprint */}
+      <div className="p-3 m-3 bg-[var(--surface-elevated)] border border-[var(--border)] rounded-lg space-y-2">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-bold text-slate-400">System Status</span>
-          <span className={`w-2 h-2 rounded-full ${health.status === 'ok' ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`} />
+          <span className="text-[11px] font-semibold tracking-wide uppercase text-[var(--text-muted)]">
+            Engine Status
+          </span>
+          <span className="flex items-center gap-1 text-[11px] font-mono">
+            {health.status === 'ok' ? (
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            ) : (
+              <span className="w-2 h-2 rounded-full bg-rose-500" />
+            )}
+            <span className={health.status === 'ok' ? 'text-emerald-600 dark:text-emerald-400 font-medium' : 'text-rose-500'}>
+              {health.status === 'ok' ? 'Online' : 'Offline'}
+            </span>
+          </span>
         </div>
 
-        <div className="space-y-1 text-[11px] font-mono">
-          <div className="flex justify-between text-slate-400">
-            <span>Playwright:</span>
-            <span className="text-emerald-400 font-bold">{health.browser}</span>
+        <div className="space-y-1 text-[11px] font-mono text-[var(--text-secondary)] pt-1 border-t border-[var(--border)]">
+          <div className="flex justify-between items-center">
+            <span>Model:</span>
+            <span className="text-[var(--text)] font-medium truncate max-w-[105px]" title={health.ai}>
+              {health.model || health.ai}
+            </span>
           </div>
-          <div className="flex justify-between text-slate-400">
-            <span>AI Planner:</span>
-            <span className="text-cyan-400 font-bold">{health.ai}</span>
+          <div className="flex justify-between items-center">
+            <span>Security:</span>
+            <span className="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400">
+              <ShieldCheck className="w-3 h-3" />
+              <span>AES-256</span>
+            </span>
           </div>
         </div>
       </div>

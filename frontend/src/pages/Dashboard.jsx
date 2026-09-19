@@ -1,21 +1,51 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Play, Activity, AlertTriangle, Eye, ShieldAlert, CheckCircle2, ArrowRight } from 'lucide-react';
-import { getRuns, startRun, getHealth } from '../services/api';
+import {
+  Play,
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  ShieldCheck,
+  ArrowRight,
+  Globe,
+  Compass,
+  Cpu,
+  History
+} from 'lucide-react';
+import { getRuns, startRun, getHealth, getModels } from '../services/api';
+import StatusBadge from '../components/StatusBadge';
 
 export default function Dashboard() {
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [goal, setGoal] = useState("Search for blue running shoes under $100 and complete guest checkout.");
   const [targetUrl, setTargetUrl] = useState("http://localhost:3001");
+  const [mode, setMode] = useState("FOCUSED"); // FOCUSED or FULL_SITE
+  const [goal, setGoal] = useState("Search for blue running shoes under $100 and complete guest checkout.");
+  const [selectedModel, setSelectedModel] = useState("qwen3.6:35b");
+  const [availableModels, setAvailableModels] = useState([
+    { id: "qwen3.6:35b", name: "qwen3.6:35b (21.1GB) - Recommended Default" },
+    { id: "qwen2.5:7b", name: "qwen2.5:7b (4.4GB) - High Speed" },
+    { id: "moondream:latest", name: "moondream:latest (1.6GB)" }
+  ]);
   const [starting, setStarting] = useState(false);
-  const [engineInfo, setEngineInfo] = useState("Ollama Local (qwen3.6:35b)");
+  const [engineInfo, setEngineInfo] = useState("qwen3.6:35b");
   const navigate = useNavigate();
 
   useEffect(() => {
     fetchRuns();
     fetchHealth();
+    fetchModels();
   }, []);
+
+  const fetchModels = async () => {
+    try {
+      const data = await getModels();
+      if (data?.models?.length > 0) {
+        setAvailableModels(data.models);
+        if (data.default) setSelectedModel(data.default);
+      }
+    } catch (e) {}
+  };
 
   const fetchHealth = async () => {
     try {
@@ -37,12 +67,36 @@ export default function Dashboard() {
     }
   };
 
+  const distinctPreviousRuns = React.useMemo(() => {
+    const seen = new Set();
+    const list = [];
+    for (const r of runs) {
+      const key = `${r.target_url}___${r.goal || ''}___${r.mode || 'FOCUSED'}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        list.push(r);
+      }
+    }
+    return list;
+  }, [runs]);
+
+  const handleSelectPreviousRun = (runId) => {
+    if (!runId) return;
+    const found = runs.find(r => r.id === runId);
+    if (found) {
+      setTargetUrl(found.target_url || '');
+      setMode(found.mode || 'FOCUSED');
+      if (found.goal) setGoal(found.goal);
+      if (found.model) setSelectedModel(found.model);
+    }
+  };
+
   const handleStartTest = async (e) => {
     e.preventDefault();
-    if (!goal.trim()) return;
+    if (!targetUrl.trim()) return;
     setStarting(true);
     try {
-      const res = await startRun(goal, targetUrl);
+      const res = await startRun(goal, targetUrl, mode, selectedModel);
       navigate(`/agent?run_id=${res.run_id}`);
     } catch (err) {
       alert("Failed to start run: " + (err.response?.data?.detail || err.message));
@@ -53,213 +107,293 @@ export default function Dashboard() {
 
   const totalRuns = runs.length;
   const completedRuns = runs.filter(r => r.status === 'COMPLETED').length;
-  const totalUXIssues = runs.reduce((acc, r) => acc + (r.issues ? r.issues.filter(i => i.type === 'FRICTION').length : 0), 0);
-  const totalA11yIssues = runs.reduce((acc, r) => acc + (r.issues ? r.issues.filter(i => i.type === 'ACCESSIBILITY').length : 0), 0);
-  const avgFriction = totalRuns > 0 ? (runs.reduce((acc, r) => acc + (r.friction_score || 100), 0) / totalRuns).toFixed(1) : '100.0';
+  const totalIssues = runs.reduce((acc, r) => acc + (r.issues ? r.issues.length : 0), 0);
+  const avgHealth = totalRuns > 0 ? (runs.reduce((acc, r) => acc + (r.friction_score || 100), 0) / totalRuns).toFixed(1) : '100.0';
+
+  const applyPreset = (presetUrl, presetMode, presetGoal) => {
+    setTargetUrl(presetUrl);
+    setMode(presetMode);
+    setGoal(presetGoal);
+  };
 
   return (
-    <div className="p-8 space-y-8 max-w-7xl mx-auto">
-      {/* Overview Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="bg-[#0f172a] border border-slate-800 p-5 rounded-2xl space-y-2">
-          <span className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Total Runs</span>
+    <div className="p-8 space-y-8 max-w-6xl mx-auto">
+      {/* Top Metrics Row */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-[var(--surface)] border border-[var(--border)] p-4 rounded-lg">
+          <span className="text-[11px] text-[var(--text-muted)] font-semibold uppercase tracking-wider block mb-1">
+            Total Audits
+          </span>
           <div className="flex items-center justify-between">
-            <span className="text-3xl font-extrabold text-white">{totalRuns}</span>
-            <Activity className="text-cyan-400" size={24} />
+            <span className="text-2xl font-bold text-[var(--text)] font-mono">{totalRuns}</span>
+            <Activity className="w-5 h-5 text-[var(--text-muted)]" />
           </div>
         </div>
 
-        <div className="bg-[#0f172a] border border-slate-800 p-5 rounded-2xl space-y-2">
-          <span className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Successful Runs</span>
+        <div className="bg-[var(--surface)] border border-[var(--border)] p-4 rounded-lg">
+          <span className="text-[11px] text-[var(--text-muted)] font-semibold uppercase tracking-wider block mb-1">
+            Completed Sessions
+          </span>
           <div className="flex items-center justify-between">
-            <span className="text-3xl font-extrabold text-emerald-400">{completedRuns}</span>
-            <CheckCircle2 className="text-emerald-400" size={24} />
+            <span className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 font-mono">{completedRuns}</span>
+            <CheckCircle2 className="w-5 h-5 text-emerald-500" />
           </div>
         </div>
 
-        <div className="bg-[#0f172a] border border-slate-800 p-5 rounded-2xl space-y-2">
-          <span className="text-xs text-slate-400 font-semibold uppercase tracking-wider">UX Friction Issues</span>
+        <div className="bg-[var(--surface)] border border-[var(--border)] p-4 rounded-lg">
+          <span className="text-[11px] text-[var(--text-muted)] font-semibold uppercase tracking-wider block mb-1">
+            Defects Flagged
+          </span>
           <div className="flex items-center justify-between">
-            <span className="text-3xl font-extrabold text-amber-400">{totalUXIssues}</span>
-            <AlertTriangle className="text-amber-400" size={24} />
+            <span className="text-2xl font-bold text-amber-600 dark:text-amber-400 font-mono">{totalIssues}</span>
+            <AlertTriangle className="w-5 h-5 text-amber-500" />
           </div>
         </div>
 
-        <div className="bg-[#0f172a] border border-slate-800 p-5 rounded-2xl space-y-2">
-          <span className="text-xs text-slate-400 font-semibold uppercase tracking-wider">A11y Violations</span>
+        <div className="bg-[var(--surface)] border border-[var(--border)] p-4 rounded-lg">
+          <span className="text-[11px] text-[var(--text-muted)] font-semibold uppercase tracking-wider block mb-1">
+            Avg Health Score
+          </span>
           <div className="flex items-center justify-between">
-            <span className="text-3xl font-extrabold text-rose-400">{totalA11yIssues}</span>
-            <ShieldAlert className="text-rose-400" size={24} />
-          </div>
-        </div>
-
-        <div className="bg-[#0f172a] border border-slate-800 p-5 rounded-2xl space-y-2">
-          <span className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Avg Friction Score</span>
-          <div className="flex items-center justify-between">
-            <span className="text-3xl font-extrabold text-cyan-400">{avgFriction}</span>
-            <span className="text-xs text-slate-400 font-mono">/ 100</span>
+            <span className="text-2xl font-bold text-[var(--accent)] font-mono">{avgHealth}</span>
+            <span className="text-xs text-[var(--text-muted)] font-mono">/ 100</span>
           </div>
         </div>
       </div>
 
-      {/* Quick Launch Panel */}
-      <div className="bg-gradient-to-r from-slate-900 via-[#0f172a] to-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-              <Play className="text-cyan-400" size={20} /> Launch New Autonomous Test
+      {/* Main Launch Console */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-6">
+          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-lg p-6">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h2 className="text-base font-semibold tracking-tight text-[var(--text)]">
+                  Launch Autonomous Audit
+                </h2>
+                <p className="text-xs text-[var(--text-secondary)]">
+                  Configure target application URL and audit scope.
+                </p>
+              </div>
+              <span className="text-[11px] font-mono px-2 py-1 rounded bg-[var(--surface-elevated)] border border-[var(--border)] text-[var(--text-secondary)]">
+                {engineInfo}
+              </span>
+            </div>
+
+            <form onSubmit={handleStartTest} className="space-y-4">
+              {/* Previous Test Run Dropdown */}
+              {distinctPreviousRuns.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)] flex items-center gap-1.5">
+                      <History className="w-3.5 h-3.5 text-[var(--accent)]" />
+                      <span>Re-run Previous Test Run</span>
+                    </label>
+                    <span className="text-[10px] text-[var(--text-muted)] font-mono">Autofill config</span>
+                  </div>
+                  <select
+                    onChange={(e) => handleSelectPreviousRun(e.target.value)}
+                    defaultValue=""
+                    className="w-full px-3 py-2 text-xs bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--accent)] rounded-md text-[var(--text)] outline-none transition-colors"
+                  >
+                    <option value="" disabled>Select a previous test to re-run...</option>
+                    {distinctPreviousRuns.slice(0, 20).map((r) => (
+                      <option key={r.id} value={r.id}>
+                        [{r.mode || 'FOCUSED'}] {r.target_url} &mdash; {r.goal ? (r.goal.slice(0, 50) + (r.goal.length > 50 ? '...' : '')) : 'Audit'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Target URL */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
+                  Target Web URL
+                </label>
+                <div className="relative">
+                  <Globe className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+                  <input
+                    type="url"
+                    value={targetUrl}
+                    onChange={(e) => setTargetUrl(e.target.value)}
+                    required
+                    placeholder="https://your-app.com"
+                    className="w-full pl-9 pr-4 py-2 text-xs bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--accent)] rounded-md text-[var(--text)] outline-none transition-colors"
+                  />
+                </div>
+              </div>
+
+              {/* Model Selection Dropdown */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                    Model Engine
+                  </label>
+                  <span className="text-[10px] text-[var(--accent)] font-medium">Active: {selectedModel}</span>
+                </div>
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--accent)] rounded-md text-[var(--text)] outline-none transition-colors font-mono"
+                >
+                  {availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name || m.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Mode Selection */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
+                  Audit Scope
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setMode("FOCUSED")}
+                    className={`p-3 rounded-md border text-left transition-all ${
+                      mode === "FOCUSED"
+                        ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
+                        : 'border-[var(--border)] bg-[var(--surface-elevated)] hover:border-[var(--border-hover)]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <Compass className={`w-4 h-4 ${mode === "FOCUSED" ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`} />
+                      <span className={`text-xs font-semibold ${mode === "FOCUSED" ? 'text-[var(--accent)]' : 'text-[var(--text)]'}`}>
+                        Focused Flow
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                      Follows a specific natural language objective or user journey.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setMode("FULL_SITE")}
+                    className={`p-3 rounded-md border text-left transition-all ${
+                      mode === "FULL_SITE"
+                        ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
+                        : 'border-[var(--border)] bg-[var(--surface-elevated)] hover:border-[var(--border-hover)]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <Cpu className={`w-4 h-4 ${mode === "FULL_SITE" ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`} />
+                      <span className={`text-xs font-semibold ${mode === "FULL_SITE" ? 'text-[var(--accent)]' : 'text-[var(--text)]'}`}>
+                        Full Site Crawl
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                      BFS crawler + 2–3 parallel agents testing forms, a11y, and broken links.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Goal Input (if focused) */}
+              {mode === "FOCUSED" && (
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
+                    Testing Objective
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={goal}
+                    onChange={(e) => setGoal(e.target.value)}
+                    placeholder="Describe the end-to-end task the agent should complete and audit..."
+                    className="w-full p-3 text-xs bg-[var(--surface-elevated)] border border-[var(--border)] focus:border-[var(--accent)] rounded-md text-[var(--text)] outline-none transition-colors leading-relaxed"
+                  />
+                </div>
+              )}
+
+              {/* Presets */}
+              <div className="pt-1">
+                <span className="text-[11px] font-medium text-[var(--text-muted)] block mb-1.5">
+                  Quick Presets:
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => applyPreset("http://localhost:3001", "FOCUSED", "Search for blue running shoes under $100 and complete guest checkout.")}
+                    className="px-2.5 py-1 text-[11px] rounded bg-[var(--surface-elevated)] border border-[var(--border)] hover:border-[var(--border-hover)] text-[var(--text-secondary)] transition-colors"
+                  >
+                    Target Demo Store (Checkout)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyPreset("http://localhost:3001", "FULL_SITE", "")}
+                    className="px-2.5 py-1 text-[11px] rounded bg-[var(--surface-elevated)] border border-[var(--border)] hover:border-[var(--border-hover)] text-[var(--text-secondary)] transition-colors"
+                  >
+                    Full Site Multi-Agent Crawl
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyPreset("https://kmec.in", "FOCUSED", "Navigate to Admissions guidelines and verify links.")}
+                    className="px-2.5 py-1 text-[11px] rounded bg-[var(--surface-elevated)] border border-[var(--border)] hover:border-[var(--border-hover)] text-[var(--text-secondary)] transition-colors"
+                  >
+                    KMEC Admissions Audit
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="submit"
+                  disabled={starting}
+                  className="w-full py-2.5 px-4 bg-[var(--accent)] hover:bg-blue-600 disabled:opacity-50 text-white rounded-md text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-sm"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>{starting ? "Spawning Agent..." : "Start Autonomous Audit"}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        {/* Recent Audits Sidebar */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+              Recent Audits
             </h3>
-            <p className="text-xs text-slate-400">Specify any website and natural language goal. The agent perceives and navigates black-box DOM autonomously.</p>
+            <Link to="/runs" className="text-xs text-[var(--accent)] hover:underline font-medium">
+              View all
+            </Link>
           </div>
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950/80 border border-cyan-500/30 text-xs font-mono text-cyan-400">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>Engine: <strong>{engineInfo}</strong></span>
+
+          <div className="space-y-2.5">
+            {loading ? (
+              <div className="text-xs text-[var(--text-muted)] text-center py-8">Loading sessions...</div>
+            ) : runs.length === 0 ? (
+              <div className="text-xs text-[var(--text-muted)] text-center py-8 bg-[var(--surface)] border border-[var(--border)] rounded-lg">
+                No audits executed yet.
+              </div>
+            ) : (
+              runs.slice(0, 5).map((run) => (
+                <Link
+                  key={run.id}
+                  to={`/report/${run.id}`}
+                  className="block bg-[var(--surface)] border border-[var(--border)] hover:border-[var(--border-hover)] rounded-lg p-3.5 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <StatusBadge status={run.status} mode={run.mode} />
+                    <span className="text-xs font-mono font-semibold text-[var(--text)]">
+                      {run.friction_score !== undefined ? `${run.friction_score.toFixed(0)}/100` : '—'}
+                    </span>
+                  </div>
+                  <div className="text-xs font-medium text-[var(--text)] truncate mb-1" title={run.target_url}>
+                    {run.target_url}
+                  </div>
+                  <div className="text-[11px] text-[var(--text-muted)] truncate" title={run.goal}>
+                    {run.goal}
+                  </div>
+                </Link>
+              ))
+            )}
           </div>
         </div>
-
-        {/* Quick Presets */}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <span className="text-xs font-semibold text-slate-400">Quick Presets:</span>
-          <button
-            type="button"
-            onClick={() => {
-              setTargetUrl("http://localhost:3001");
-              setGoal("Search for blue running shoes under $100 and complete guest checkout.");
-            }}
-            className="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition"
-          >
-            👟 Demo Store
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setTargetUrl("https://en.wikipedia.org");
-              setGoal("Search for Alan Turing, open the article, and navigate to his early life section.");
-            }}
-            className="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition"
-          >
-            🌐 Wikipedia
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setTargetUrl("https://news.ycombinator.com");
-              setGoal("Find the top story about AI, click on comments, and inspect user opinions.");
-            }}
-            className="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition"
-          >
-            📰 Hacker News
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setTargetUrl("https://github.com");
-              setGoal("Search for 'fastapi' repositories and find the most starred project.");
-            }}
-            className="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-800/80 hover:bg-slate-700 text-cyan-400 border border-slate-700 transition"
-          >
-            🐙 GitHub
-          </button>
-        </div>
-
-        <form onSubmit={handleStartTest} className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-2">
-          <div className="md:col-span-1">
-            <label className="block text-xs font-semibold text-slate-400 mb-1">Target Application URL</label>
-            <input
-              type="text"
-              value={targetUrl}
-              onChange={(e) => setTargetUrl(e.target.value)}
-              placeholder="e.g. https://en.wikipedia.org or http://localhost:3001"
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
-              required
-            />
-          </div>
-
-          <div className="md:col-span-2">
-            <label className="block text-xs font-semibold text-slate-400 mb-1">Natural Language Testing Goal</label>
-            <input
-              type="text"
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              placeholder="e.g. Find blue running shoes under $100 and complete guest checkout."
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
-              required
-            />
-          </div>
-
-          <div className="md:col-span-1 flex items-end">
-            <button
-              type="submit"
-              disabled={starting}
-              className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-3 px-6 rounded-xl transition duration-200 shadow-lg shadow-cyan-500/20 flex items-center justify-center gap-2"
-            >
-              {starting ? 'Initializing...' : 'START AUTONOMOUS TEST'}
-            </button>
-          </div>
-        </form>
-      </div>
-
-      {/* Recent Test Runs Table */}
-      <div className="bg-[#0f172a] border border-slate-800 rounded-2xl overflow-hidden">
-        <div className="p-6 border-b border-slate-800 flex justify-between items-center">
-          <h3 className="text-base font-bold text-white">Recent Audit Runs</h3>
-          <Link to="/runs" className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold flex items-center gap-1">
-            View All Runs <ArrowRight size={14} />
-          </Link>
-        </div>
-
-        {runs.length === 0 ? (
-          <div className="p-12 text-center text-slate-500 space-y-2">
-            <p>No audit runs recorded yet.</p>
-            <p className="text-xs text-slate-600">Enter a goal above and click Start Autonomous Test!</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-300">
-              <thead className="bg-slate-900/80 text-xs uppercase tracking-wider text-slate-400 border-b border-slate-800">
-                <tr>
-                  <th className="p-4">Run ID</th>
-                  <th className="p-4">Goal</th>
-                  <th className="p-4">Status</th>
-                  <th className="p-4">Steps</th>
-                  <th className="p-4">Friction Score</th>
-                  <th className="p-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800">
-                {runs.slice(0, 5).map((r) => (
-                  <tr key={r.id} className="hover:bg-slate-800/40 transition">
-                    <td className="p-4 font-mono text-xs text-cyan-400 font-semibold">{r.id.slice(0, 8)}</td>
-                    <td className="p-4 max-w-xs truncate text-slate-200">{r.goal}</td>
-                    <td className="p-4">
-                      <span className={`inline-block px-2.5 py-1 text-xs font-bold rounded-full ${
-                        r.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                        r.status === 'RUNNING' ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 animate-pulse' :
-                        'bg-slate-800 text-slate-400'
-                      }`}>
-                        {r.status}
-                      </span>
-                    </td>
-                    <td className="p-4 font-mono">{r.steps_count}</td>
-                    <td className="p-4">
-                      <span className={`font-bold ${r.friction_score >= 80 ? 'text-emerald-400' : r.friction_score >= 50 ? 'text-amber-400' : 'text-rose-400'}`}>
-                        {r.friction_score}/100
-                      </span>
-                    </td>
-                    <td className="p-4 text-right">
-                      <Link
-                        to={`/report/${r.id}`}
-                        className="inline-flex items-center gap-1 text-xs font-bold text-cyan-400 hover:underline"
-                      >
-                        <Eye size={14} /> Report
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
     </div>
   );
