@@ -25,8 +25,8 @@ class BrowserManager:
             ]
         )
         self.context = await self.browser.new_context(
-            viewport={'width': 1280, 'height': 800},
-            device_scale_factor=1,
+            viewport={'width': 1440, 'height': 900},
+            device_scale_factor=1.25,
             user_agent=DESKTOP_USER_AGENT,
             locale="en-US"
         )
@@ -96,10 +96,105 @@ class BrowserManager:
             except Exception:
                 pass
 
-    async def take_screenshot(self, path: str):
+    async def take_screenshot(self, path: str, full_page: bool = False):
         if not self.page:
             raise RuntimeError("Browser page not initialized")
-        await self.page.screenshot(path=path, full_page=False)
+        try:
+            await self.page.wait_for_load_state("domcontentloaded", timeout=2000)
+        except Exception:
+            pass
+        await self.page.wait_for_timeout(350)
+        await self.page.screenshot(path=path, full_page=full_page)
+
+    async def highlight_element(self, target_element: Optional[Dict[str, Any]], step_number: int, action: str):
+        """Draws a visual target indicator and action label on the element for clear screenshot documentation."""
+        if not self.page or not target_element:
+            return
+        selector = target_element.get("selector")
+        x = target_element.get("x", 0)
+        y = target_element.get("y", 0)
+        w = target_element.get("width", 0)
+        h = target_element.get("height", 0)
+        try:
+            await self.page.evaluate("""({ sel, x, y, w, h, step, act }) => {
+                try {
+                    document.querySelectorAll('.blackbox-action-overlay').forEach(el => el.remove());
+                    let el = null;
+                    if (sel) {
+                        try { el = document.querySelector(sel); } catch(e) {}
+                    }
+                    if (!el && x !== undefined && y !== undefined && w > 0 && h > 0) {
+                        try { el = document.elementFromPoint(x + w / 2, y + h / 2); } catch(e) {}
+                    }
+
+                    let rect = null;
+                    if (el) {
+                        try { el.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch(e) {}
+                        rect = el.getBoundingClientRect();
+                        el.style.outline = '3px solid #2563eb';
+                        el.style.outlineOffset = '2px';
+                        el.style.boxShadow = '0 0 16px rgba(37, 99, 235, 0.7)';
+                        el.setAttribute('data-blackbox-highlight', 'true');
+                    } else if (w > 0 && h > 0) {
+                        rect = { top: y, left: x, width: w, height: h };
+                        const box = document.createElement('div');
+                        box.className = 'blackbox-action-overlay';
+                        box.style.position = 'fixed';
+                        box.style.top = y + 'px';
+                        box.style.left = x + 'px';
+                        box.style.width = w + 'px';
+                        box.style.height = h + 'px';
+                        box.style.border = '3px solid #2563eb';
+                        box.style.boxShadow = '0 0 16px rgba(37, 99, 235, 0.7)';
+                        box.style.pointerEvents = 'none';
+                        box.style.zIndex = '999998';
+                        document.body.appendChild(box);
+                    }
+
+                    if (rect) {
+                        const badge = document.createElement('div');
+                        badge.className = 'blackbox-action-overlay';
+                        badge.style.position = 'fixed';
+                        badge.style.top = Math.max(6, rect.top - 28) + 'px';
+                        badge.style.left = Math.max(6, rect.left) + 'px';
+                        badge.style.backgroundColor = '#1d4ed8';
+                        badge.style.color = '#ffffff';
+                        badge.style.fontFamily = 'monospace';
+                        badge.style.fontSize = '12px';
+                        badge.style.fontWeight = 'bold';
+                        badge.style.padding = '3px 8px';
+                        badge.style.borderRadius = '4px';
+                        badge.style.zIndex = '999999';
+                        badge.style.boxShadow = '0 2px 8px rgba(0,0,0,0.4)';
+                        badge.style.pointerEvents = 'none';
+                        badge.innerText = `STEP ${step}: ${act}`;
+                        document.body.appendChild(badge);
+                    }
+                } catch(e) {}
+            }""", {"sel": selector, "x": x, "y": y, "w": w, "h": h, "step": step_number, "act": action})
+            await self.page.wait_for_timeout(250)
+        except Exception:
+            pass
+
+    async def clear_highlight(self):
+        """Clears highlight markers from page after screenshot is captured."""
+        if not self.page:
+            return
+        try:
+            await self.page.evaluate("""() => {
+                try {
+                    document.querySelectorAll('.blackbox-action-overlay').forEach(el => el.remove());
+                    document.querySelectorAll('[data-blackbox-highlight]').forEach(el => {
+                        el.style.outline = '';
+                        el.style.outlineOffset = '';
+                        el.style.boxShadow = '';
+                        el.removeAttribute('data-blackbox-highlight');
+                    });
+                } catch(e) {}
+            }""")
+        except Exception:
+            pass
+
 
     async def execute_action(self, action_data: Dict[str, Any], target_element: Optional[Dict[str, Any]] = None) -> bool:
         if not self.page:

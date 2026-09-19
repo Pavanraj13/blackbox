@@ -123,15 +123,33 @@ class ObserverService:
                 
                 const tag = el.tagName.toLowerCase();
                 if (el.getAttribute('name')) return `${tag}[name="${CSS.escape(el.getAttribute('name'))}"]`;
-                if (el.getAttribute('type')) return `${tag}[type="${CSS.escape(el.getAttribute('type'))}"]`;
                 if (el.getAttribute('aria-label')) return `${tag}[aria-label="${CSS.escape(el.getAttribute('aria-label'))}"]`;
+                if (el.getAttribute('href') && tag === 'a') return `a[href="${CSS.escape(el.getAttribute('href'))}"]`;
 
-                // Global index among all matching tag elements in document
-                const allSameTag = Array.from(document.querySelectorAll(tag));
-                if (allSameTag.length > 1) {
-                    const globalIndex = allSameTag.indexOf(el) + 1;
-                    return `${tag}:nth-of-type(${globalIndex})`;
-                }
+                // Build short hierarchical path with valid parent-scoped :nth-of-type
+                try {
+                    let path = [];
+                    let curr = el;
+                    while (curr && curr.nodeType === Node.ELEMENT_NODE && curr !== document.body && curr !== document.documentElement) {
+                        if (curr.id) {
+                            path.unshift(`#${CSS.escape(curr.id)}`);
+                            break;
+                        }
+                        let parent = curr.parentNode;
+                        if (!parent) break;
+                        let siblings = Array.from(parent.children).filter(c => c.tagName === curr.tagName);
+                        if (siblings.length > 1) {
+                            let idx = siblings.indexOf(curr) + 1;
+                            path.unshift(`${curr.tagName.toLowerCase()}:nth-of-type(${idx})`);
+                        } else {
+                            path.unshift(curr.tagName.toLowerCase());
+                        }
+                        curr = parent;
+                        if (path.length >= 4) break;
+                    }
+                    if (path.length > 0) return path.join(' > ');
+                } catch(e) {}
+
                 return tag;
             }
 
@@ -141,10 +159,43 @@ class ObserverService:
             rawNodes.forEach((el) => {
                 if (!isElementVisible(el)) return;
 
+                const tag = el.tagName.toLowerCase();
+                let isExternal = false;
+
+                // Check links for raw media assets and non-navigable targets
+                if (tag === 'a') {
+                    const href = (el.getAttribute('href') || '').trim();
+                    const hrefLower = href.toLowerCase();
+
+                    // 1. Skip non-navigable links (empty, hash only, mailto, tel, javascript)
+                    if (!href || href === '#' || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) {
+                        return;
+                    }
+
+                    // 2. Skip raw static media/file assets (e.g. DSC_0226@2x.webp, photos, pdfs, zips)
+                    const ASSET_EXTENSIONS = ['.webp', '.jpg', '.jpeg', '.png', '.gif', '.svg', '.ico', '.pdf', '.zip', '.tar', '.gz', '.mp4', '.mp3'];
+                    const pathOnly = hrefLower.split('?')[0].split('#')[0];
+                    if (ASSET_EXTENSIONS.some(ext => pathOnly.endsWith(ext))) {
+                        return;
+                    }
+
+                    // 3. Detect external domains (social media or different origins)
+                    const EXTERNAL_DOMAINS = ['facebook.com', 'twitter.com', 'x.com', 'instagram.com', 'youtube.com', 'linkedin.com', 'pinterest.com', 'maps.google.com', 't.me'];
+                    if (EXTERNAL_DOMAINS.some(d => hrefLower.includes(d))) {
+                        isExternal = true;
+                    } else if (href.startsWith('http://') || href.startsWith('https://')) {
+                        try {
+                            const parsedUrl = new URL(href);
+                            if (parsedUrl.origin !== window.location.origin) {
+                                isExternal = true;
+                            }
+                        } catch(e) {}
+                    }
+                }
+
                 const rect = el.getBoundingClientRect();
                 const accName = getAccessibleName(el);
                 const role = getRole(el);
-                const tag = el.tagName.toLowerCase();
 
                 // Prevent duplicate elements at exact same visual location and name
                 const dedupeKey = `${tag}_${Math.round(rect.left)}_${Math.round(rect.top)}_${accName.slice(0, 25)}`;
@@ -194,6 +245,7 @@ class ObserverService:
                     visible: true,
                     in_viewport: inViewport,
                     is_primary_action: isPrimaryAction,
+                    is_external: isExternal,
                     x: Math.round(rect.left),
                     y: Math.round(rect.top),
                     width: Math.round(rect.width),
@@ -208,11 +260,15 @@ class ObserverService:
 
             // Sorting logic:
             // 1. Primary action buttons (Buy Now, Add to Cart) first!
-            // 2. In-viewport elements in visual reading order (top-to-bottom, left-to-right)
-            // 3. Out-of-viewport elements last
+            // 2. Internal elements before external links!
+            // 3. In-viewport elements in visual reading order (top-to-bottom, left-to-right)
+            // 4. Out-of-viewport elements last
             elements.sort((a, b) => {
                 if (a.is_primary_action && !b.is_primary_action) return -1;
                 if (!a.is_primary_action && b.is_primary_action) return 1;
+
+                if (!a.is_external && b.is_external) return -1;
+                if (a.is_external && !b.is_external) return 1;
 
                 if (a.in_viewport && !b.in_viewport) return -1;
                 if (!a.in_viewport && b.in_viewport) return 1;
